@@ -2,6 +2,8 @@
 
 This repo contains a minimal Parameter Golf baseline experiment setup. The main training entrypoint in this repo is `baseline/train_gpt.py`.
 
+> Note: The original baseline reference for this repo is in [baseline/README.md](baseline/README.md).
+
 ## Run a Full Experiment on a GPU Server
 
 These steps are adapted from `baseline/README.md`, but updated for this repo layout.
@@ -66,21 +68,3 @@ The training script writes artifacts in the current working directory:
 - `final_model.int8.ptz`
 
 The final score to watch is printed in the `final_int8_zlib_roundtrip` lines near the end of the log. That is the post-quantization validation result for the compressed artifact.
-
-### 6. Common experiment knobs
-
-You can override the main settings with environment variables:
-
-```bash
-RUN_ID=my_experiment
-SEED=1337
-ITERATIONS=20000
-TRAIN_BATCH_TOKENS=524288
-TRAIN_SEQ_LEN=1024
-VAL_BATCH_SIZE=524288
-TRAIN_LOG_EVERY=200
-VAL_LOSS_EVERY=1000
-MAX_WALLCLOCK_SECONDS=600
-```
-
-For challenge-comparable runs, start by validating on 1 GPU, then move to an 8xH100 setup for the final timing-sensitive experiment.
