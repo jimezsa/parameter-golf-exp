@@ -3,7 +3,7 @@
 ## Paper / Source
 - Title: The Era of 1-bit LLMs: All Large Language Models are in 1.58 Bits
 - Authors: Hu et al. plus the finalized local implementation spec
-- Link: `/home/david/.opencolab/projects/default/AGENTS/scout/spec_experiments.md`
+- Link: `/home/david/.opencolab/projects/default/AGENTS/scout/spec-003-bitnet.md`
 - Key idea: Ternarize the heavy projection weights onto `{-1, 0, 1}` with an abs-mean scale and STE training, then byte-pack four ternary values per `uint8` before LZMA.
 
 ## Hypothesis
