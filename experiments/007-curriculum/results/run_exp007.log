@@ -1,0 +1,106 @@
+logs/exp007_curriculum.txt
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:80 curriculum_mode:linear curriculum_cache:/workspace/parameter-golf/parameter-golf-exp/experiments/007-curriculum/results/curriculum_cache
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:26993756
+mtp_num_heads:0 mtp_loss_weight:0.2 mtp_params:0
+XSA:last_11 active_layers:[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+world_size:1 grad_accum_steps:8
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:8 num_kv_heads:4
+tie_embeddings:True embed_lr:0.035 head_lr:0.0 matrix_lr:0.025 scalar_lr:0.025
+train_batch_tokens:786432 train_seq_len:2048 iterations:20000 warmup_steps:20 max_wallclock_seconds:600.000
+seed:1337
+warmup_step:1/20
+warmup_step:2/20
+warmup_step:3/20
+warmup_step:4/20
+warmup_step:5/20
+warmup_step:6/20
+warmup_step:7/20
+warmup_step:8/20
+warmup_step:9/20
+warmup_step:10/20
+warmup_step:11/20
+warmup_step:12/20
+warmup_step:13/20
+warmup_step:14/20
+warmup_step:15/20
+warmup_step:16/20
+warmup_step:17/20
+warmup_step:18/20
+warmup_step:19/20
+warmup_step:20/20
+step:0/20000 val_loss:6.9309 val_bpb:4.1049 train_time:0ms step_avg:0.02ms
+step:1/20000 train_loss:6.7586 train_time:31079ms step_avg:31079.42ms
+late_qat:enabled step:1 scale:0.0052
+step:2/20000 train_loss:8.4259 train_time:41315ms step_avg:20657.45ms
+step:3/20000 train_loss:9.0429 train_time:48054ms step_avg:16017.84ms
+step:4/20000 train_loss:9.5615 train_time:51993ms step_avg:12998.33ms
+step:5/20000 train_loss:9.0163 train_time:55461ms step_avg:11092.13ms
+step:6/20000 train_loss:9.5952 train_time:58153ms step_avg:9692.09ms
+step:7/20000 train_loss:8.7936 train_time:60508ms step_avg:8643.99ms
+step:8/20000 train_loss:9.6517 train_time:62447ms step_avg:7805.81ms
+step:9/20000 train_loss:9.3823 train_time:64268ms step_avg:7140.87ms
+step:10/20000 train_loss:9.1533 train_time:65841ms step_avg:6584.07ms
+swa:start step:50
+step:500/20000 train_loss:2.5562 train_time:407748ms step_avg:815.50ms
+step:793/20000 val_loss:2.5312 val_bpb:1.4991 train_time:600344ms step_avg:757.05ms
+stopping_early: wallclock_cap train_time:600344ms step:793/20000
+peak memory allocated: 23002 MiB reserved: 23196 MiB
+ema:applying EMA weights
+DIAGNOSTIC post_ema val_loss:4.8635 val_bpb:2.8805 eval_time:16295ms
+Serialized model: 106158518 bytes
+Code size: 111008 bytes
+gptq:building non-banked model for Hessian collection...
+gptq:generating autoregressive calibration data (64 seqs x 2048 tokens, temp=0.8)...
+gptq:generated 64 sequences in 223.1s
+gptq:collecting hessians from autoregressive data...
+gptq:collected hessians for 68 layers (AR self-gen)
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/workspace/parameter-golf/parameter-golf-exp/experiments/007-curriculum/train_gpt.py", line 2372, in <module>
+[rank0]:     main()
+[rank0]:   File "/workspace/parameter-golf/parameter-golf-exp/experiments/007-curriculum/train_gpt.py", line 2231, in main
+[rank0]:     quant_result, quant_meta = mixed_quantize_int6(unbanked_sd, {"mlp", "attn"}, hessians=hessians)
+[rank0]:                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/workspace/parameter-golf/parameter-golf-exp/experiments/007-curriculum/train_gpt.py", line 1711, in mixed_quantize_int6
+[rank0]:     q, s = quantize_int6_gptq(t, hessian=H, clip_range=cr)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/workspace/parameter-golf/parameter-golf-exp/experiments/007-curriculum/train_gpt.py", line 1383, in quantize_int6_gptq
+[rank0]:     Hinv = torch.linalg.cholesky(H)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]: torch._C._LinAlgError: linalg.cholesky: The factorization could not be completed because the input is not positive-definite (the leading minor of order 317 is not positive-definite).
+[rank0]:[W407 18:40:28.927129885 ProcessGroupNCCL.cpp:1524] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
+E0407 18:40:30.184000 43817 torch/distributed/elastic/multiprocessing/api.py:882] failed (exitcode: 1) local_rank: 0 (pid: 43886) of binary: /usr/local/bin/python
+Traceback (most recent call last):
+  File "/usr/local/bin/torchrun", line 7, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 357, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/run.py", line 936, in main
+    run(args)
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/run.py", line 927, in run
+    elastic_launch(
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/launcher/api.py", line 156, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/launcher/api.py", line 293, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+experiments/007-curriculum/train_gpt.py FAILED
+------------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-04-07_18:40:30
+  host      : 3c0423380c53
+  rank      : 0 (local_rank: 0)
+  exitcode  : 1 (pid: 43886)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================
