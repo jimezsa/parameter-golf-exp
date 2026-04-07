@@ -663,14 +663,11 @@ class CausalSelfAttention(nn.Module):
         vh = v.repeat_interleave(repeat, dim=2).transpose(1, 2)
         key_positions = torch.arange(k.size(1), device=q.device, dtype=query_positions.dtype).view(1, 1, 1, -1)
         bool_mask = key_positions <= query_positions.view(query_positions.size(0), 1, query_positions.size(1), 1)
-        # Manual attention: SDPA flash backend rejects q_len != kv_len with custom mask.
-        # torch._dynamo also rejects @compiler.disable on inlined instance methods.
-        # Plain matmul is compile-safe and numerically identical.
-        scale = qh.size(-1) ** -0.5
-        attn = (qh @ kh.transpose(-2, -1)) * scale
-        attn = attn.masked_fill(~bool_mask, float('-inf'))
-        attn = attn.softmax(dim=-1)
-        y = attn @ vh
+        # Float mask for mem_efficient backend (flash rejects q_len != kv_len with custom mask).
+        attn_mask = torch.zeros(bool_mask.shape, dtype=q.dtype, device=q.device).masked_fill_(~bool_mask, float('-inf'))
+        # mem_efficient backend supports arbitrary masks and avoids OOM from materializing full matrix.
+        with torch.nn.attention.sdpa_kernel(torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION):
+            y = F.scaled_dot_product_attention(qh, kh, vh, attn_mask=attn_mask, dropout_p=0.0)
         return y.transpose(1, 2)
 
     def forward(
