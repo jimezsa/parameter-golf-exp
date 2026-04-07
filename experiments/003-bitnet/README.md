@@ -3,7 +3,7 @@
 ## Paper / Source
 - Title: The Era of 1-bit LLMs: All Large Language Models are in 1.58 Bits
 - Authors: Hu et al. plus the finalized local implementation spec
-- Link: `/home/david/.opencolab/projects/default/AGENTS/scout/spec-003-bitnet.md`
+- Link: scout agent `spec-003-bitnet.md`
 - Key idea: Ternarize the heavy projection weights onto `{-1, 0, 1}` with an abs-mean scale and STE training, then byte-pack four ternary values per `uint8` before LZMA.
 
 ## Hypothesis
@@ -22,12 +22,10 @@ If a PyTorch-native `TernaryLinear` only adds modest step-time overhead, BitNet-
 - GPU: 1x H100 for the latency gate
 - Default benchmark from repo root:
 ```bash
-cd /home/david/.opencolab/projects/default/parameter-golf-exp
 python experiments/003-bitnet/benchmark_ternary_latency.py
 ```
 - Heavier H100 stress test:
 ```bash
-cd /home/david/.opencolab/projects/default/parameter-golf-exp
 python experiments/003-bitnet/benchmark_ternary_latency.py \
   --batch-size 8 \
   --seq-len 1024 \

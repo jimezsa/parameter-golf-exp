@@ -3,7 +3,7 @@
 ## Paper / Source
 - Title: Depth recurrence with partial middle-layer sharing and learned per-step scalar conditioning
 - Authors: Internal experiment spec from scout
-- Link: `/home/david/.opencolab/projects/default/AGENTS/scout/spec-002-depth-recurrence.md`
+- Link: scout agent `spec-002-depth-recurrence.md`
 - Key idea: Reuse the middle transformer block stack multiple times so an 11-layer physical model behaves like a deeper model, while keeping early and late layers unique for stability and adding only a tiny learned step-scaling tensor.
 
 ## Hypothesis

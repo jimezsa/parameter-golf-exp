@@ -3,7 +3,7 @@
 ## Paper / Source
 - Title: Record-mined port from the 8192-BPE ternary track into the 1.1147 BPB dense SOTA baseline
 - Authors: Internal experiment port based on scout's approved Experiment 001 spec
-- Link: `/home/david/.opencolab/projects/default/AGENTS/scout/findings.md`
+- Link: scout agent `findings.md`
 - Key idea: Replace the 1024-token tied embedding with an 8192-token factored tied embedding so the model gets the tokenizer/BPB win without blowing the 16 MB artifact budget.
 
 ## Hypothesis

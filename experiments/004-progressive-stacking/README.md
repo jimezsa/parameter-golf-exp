@@ -3,7 +3,7 @@
 ## Paper / Source
 - Title: Progressive Layer Stacking & LZMA Entropy Estimator
 - Authors: local implementation spec on top of Exp 003 BitNet work
-- Link: `/home/david/.opencolab/projects/default/AGENTS/scout/spec-004-progressive-stacking.md`
+- Link: scout agent `spec-004-progressive-stacking.md`
 - Key idea: train a shallow 12-layer model for fast early throughput, then duplicate it into a 24-layer model mid-run once the compression math is validated for ternary weights.
 
 ## Hypothesis
@@ -22,12 +22,10 @@ If the ternary projection weights really compress to `<= 0.20 bytes/param` after
 ## Run Config
 - Compression blocker from repo root:
 ```bash
-cd /home/david/.opencolab/projects/default/parameter-golf-exp
 python experiments/004-progressive-stacking/estimate_lzma_entropy.py
 ```
 - Full training run from repo root:
 ```bash
-cd /home/david/.opencolab/projects/default/parameter-golf-exp
 python experiments/004-progressive-stacking/train_gpt.py
 ```
 - Key defaults for Deliverable 2:
@@ -39,7 +37,6 @@ python experiments/004-progressive-stacking/train_gpt.py
   - `MLP_MULT=4.0`
 - Optional single-format checks:
 ```bash
-cd /home/david/.opencolab/projects/default/parameter-golf-exp
 python experiments/004-progressive-stacking/estimate_lzma_entropy.py --pack-format base3
 python experiments/004-progressive-stacking/estimate_lzma_entropy.py --pack-format two_bit --blocking-format two_bit
 ```

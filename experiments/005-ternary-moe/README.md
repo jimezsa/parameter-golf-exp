@@ -3,7 +3,7 @@
 ## Paper / Source
 - Title: Ternary MoE
 - Authors: scout implementation spec on top of Exp 003 ternary work
-- Link: `/home/david/.opencolab/projects/default/AGENTS/scout/experiments/005-ternary-moe/README.md`
+- Link: scout agent `experiments/005-ternary-moe/README.md`
 - Key idea: keep the heavy trunk ternary, replace every third FFN with a Top-1 routed MoE block, and pack the resulting model directly with ternary payloads plus LZMA instead of the old dense GPTQ path.
 
 ## Hypothesis
@@ -30,7 +30,6 @@ If Exp 003 style ternary weights buy us roughly `0.18 B/param` after packing, th
 From repo root:
 
 ```bash
-cd /home/david/.opencolab/projects/default/parameter-golf-exp
 python experiments/005-ternary-moe/train_gpt.py
 ```
 
