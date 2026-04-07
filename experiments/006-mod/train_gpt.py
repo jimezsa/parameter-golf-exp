@@ -656,6 +656,7 @@ class CausalSelfAttention(nn.Module):
         vn = F.normalize(v, dim=-1).unsqueeze(-2)    # [B, T, Hkv, 1, D] -- broadcast ready
         proj = (y_g * vn).sum(dim=-1, keepdim=True) * vn
         return (y_g - proj).reshape(B, T, H, D)
+    @torch.compiler.disable
     def _selected_attention(self, q: Tensor, k: Tensor, v: Tensor, query_positions: Tensor) -> Tensor:
         qh = q.transpose(1, 2)
         repeat = self.num_heads // self.num_kv_heads
