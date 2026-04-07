@@ -565,14 +565,27 @@ class CurriculumTokenStream:
         unique_ratio = len(set(token_ids)) / len(token_ids)
         return self.entropy_weight * entropy_norm + (1.0 - self.entropy_weight) * unique_ratio
 
-    def _build_shard_scores(self, file: Path, tokens: Tensor) -> tuple[np.ndarray, float]:
+    def _build_shard_scores(self, file: Path, tokens: Tensor, _MAX_SCORE_SEQS: int = 2000) -> tuple[np.ndarray, float]:
         num_sequences = max((tokens.numel() - 1) // self.seq_len, 0)
         if num_sequences <= 0:
             raise ValueError(f"Shard {file} is too small for seq_len={self.seq_len}")
         scores = np.empty(num_sequences, dtype=np.float32)
-        for seq_idx in range(num_sequences):
-            start = seq_idx * self.seq_len
-            scores[seq_idx] = self._score_sequence(tokens[start : start + self.seq_len])
+        if num_sequences > _MAX_SCORE_SEQS:
+            # Score a random sample and assign mean to the rest — bounds startup time on large shards
+            rng = np.random.default_rng(self.seed)
+            sampled_idxs = rng.choice(num_sequences, size=_MAX_SCORE_SEQS, replace=False)
+            sampled_scores = np.array([
+                self._score_sequence(tokens[int(i) * self.seq_len : int(i) * self.seq_len + self.seq_len])
+                for i in sampled_idxs
+            ], dtype=np.float32)
+            mean_score = float(sampled_scores.mean())
+            scores[:] = mean_score
+            for idx, s in zip(sampled_idxs.tolist(), sampled_scores.tolist()):
+                scores[idx] = s
+        else:
+            for seq_idx in range(num_sequences):
+                start = seq_idx * self.seq_len
+                scores[seq_idx] = self._score_sequence(tokens[start : start + self.seq_len])
         return scores, float(scores.mean())
 
     def _load_or_build_scores(self, file: Path, tokens: Tensor) -> tuple[np.ndarray, float]:

@@ -662,7 +662,9 @@ class CausalSelfAttention(nn.Module):
         kh = k.repeat_interleave(repeat, dim=2).transpose(1, 2)
         vh = v.repeat_interleave(repeat, dim=2).transpose(1, 2)
         key_positions = torch.arange(k.size(1), device=q.device, dtype=query_positions.dtype).view(1, 1, 1, -1)
-        attn_mask = key_positions <= query_positions.view(query_positions.size(0), 1, query_positions.size(1), 1)
+        bool_mask = key_positions <= query_positions.view(query_positions.size(0), 1, query_positions.size(1), 1)
+        # Float mask (-inf where masked) for torch.compile compatibility — bool masks trigger "Invalid backend"
+        attn_mask = torch.zeros(bool_mask.shape, dtype=q.dtype, device=q.device).masked_fill_(~bool_mask, float('-inf'))
         y = F.scaled_dot_product_attention(qh, kh, vh, attn_mask=attn_mask, dropout_p=0.0)
         return y.transpose(1, 2)
 
