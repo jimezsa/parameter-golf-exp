@@ -656,7 +656,6 @@ class CausalSelfAttention(nn.Module):
         vn = F.normalize(v, dim=-1).unsqueeze(-2)    # [B, T, Hkv, 1, D] -- broadcast ready
         proj = (y_g * vn).sum(dim=-1, keepdim=True) * vn
         return (y_g - proj).reshape(B, T, H, D)
-    @torch.compiler.disable
     def _selected_attention(self, q: Tensor, k: Tensor, v: Tensor, query_positions: Tensor) -> Tensor:
         qh = q.transpose(1, 2)
         repeat = self.num_heads // self.num_kv_heads
@@ -664,9 +663,14 @@ class CausalSelfAttention(nn.Module):
         vh = v.repeat_interleave(repeat, dim=2).transpose(1, 2)
         key_positions = torch.arange(k.size(1), device=q.device, dtype=query_positions.dtype).view(1, 1, 1, -1)
         bool_mask = key_positions <= query_positions.view(query_positions.size(0), 1, query_positions.size(1), 1)
-        # Float mask (-inf where masked) for torch.compile compatibility — bool masks trigger "Invalid backend"
-        attn_mask = torch.zeros(bool_mask.shape, dtype=q.dtype, device=q.device).masked_fill_(~bool_mask, float('-inf'))
-        y = F.scaled_dot_product_attention(qh, kh, vh, attn_mask=attn_mask, dropout_p=0.0)
+        # Manual attention: SDPA flash backend rejects q_len != kv_len with custom mask.
+        # torch._dynamo also rejects @compiler.disable on inlined instance methods.
+        # Plain matmul is compile-safe and numerically identical.
+        scale = qh.size(-1) ** -0.5
+        attn = (qh @ kh.transpose(-2, -1)) * scale
+        attn = attn.masked_fill(~bool_mask, float('-inf'))
+        attn = attn.softmax(dim=-1)
+        y = attn @ vh
         return y.transpose(1, 2)
 
     def forward(
