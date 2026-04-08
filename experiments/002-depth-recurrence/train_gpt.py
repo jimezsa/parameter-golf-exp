@@ -97,6 +97,7 @@ class Hyperparameters:
     # GPTQ calibration
     gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 256))
     gptq_block_size = int(os.environ.get("GPTQ_BLOCK_SIZE", 128))
+    use_int8_zlib = bool(int(os.environ.get("USE_INT8_ZLIB", "0")))
 
 # --- Batched Newton-Schulz orthogonalization ---
 
@@ -2051,114 +2052,136 @@ def main() -> None:
     # Unbank 3D tensors into individual 2D tensors for quantization
     sd_cpu = {k: v.detach().cpu() for k, v in export_sd.items()}
     unbanked_sd = _unbank_state_dict(sd_cpu, args.num_layers)
-    # Full GPTQ: collect Hessians via a temporary non-banked model
-    log0(f"gptq:building non-banked model for Hessian collection...")
-    hessian_model = _HessianGPT(
-        vocab_size=args.vocab_size, num_layers=args.num_layers, model_dim=args.model_dim,
-        num_heads=args.num_heads, num_kv_heads=args.num_kv_heads, mlp_mult=args.mlp_mult,
-        tie_embeddings=args.tie_embeddings, logit_softcap=args.logit_softcap,
-        rope_base=args.rope_base, qk_gain_init=args.qk_gain_init,
-        bigram_vocab_size=args.bigram_vocab_size, bigram_dim=args.bigram_dim,
-        xsa_last_n=args.xsa_last_n, rope_dims=args.rope_dims, ln_scale=args.ln_scale,
-        ve_enabled=args.ve_enabled, ve_dim=args.ve_dim, ve_layers=args.ve_layers,
-        recurrence_depth=args.recurrence_depth,
-        recurrence_start=args.recurrence_start,
-        recurrence_end=args.recurrence_end,
-    ).to(device).bfloat16()
-    for m in hessian_model.modules():
-        if isinstance(m, CastedLinear):
-            m.float()
-    restore_low_dim_params_to_fp32(hessian_model)
-    # Load unbanked weights into the non-banked model
-    hessian_model.load_state_dict(
-        {k: v.to(device) for k, v in unbanked_sd.items() if k in hessian_model.state_dict()},
-        strict=False,
-    )
-    # Autoregressive self-generated calibration (no external data)
-    log0("gptq:generating autoregressive calibration data (64 seqs x 2048 tokens, temp=0.8)...")
-    base_model.load_state_dict(export_sd, strict=False)
-    t_gen = time.perf_counter()
-    ar_tokens = generate_autoregressive_calib(
-        base_model, device, num_seqs=64, seq_len=args.train_seq_len,
-        vocab_size=args.vocab_size, temperature=0.8, batch_size=8, seed=args.seed,
-    )
-    log0(f"gptq:generated {len(ar_tokens)} sequences in {time.perf_counter()-t_gen:.1f}s")
-    log0("gptq:collecting hessians from autoregressive data...")
-    hessians = collect_hessians_from_tokens(hessian_model, ar_tokens, device)
-    log0(f"gptq:collected hessians for {len(hessians)} layers (AR self-gen)")
-    del ar_tokens
-    del hessian_model
-    torch.cuda.empty_cache()
-    quant_result, quant_meta = mixed_quantize_int6(unbanked_sd, {"mlp", "attn"}, hessians=hessians)
-    # NOVEL: Selective ±1 pruning by reconstruction error
-    # Sort ±1 quantized values by their reconstruction error (scale²),
-    # prune least-impactful first until artifact fits target size.
-    target_mb = float(os.environ.get("TARGET_MB", "15.9"))
-    code_bytes_est = len(code.encode("utf-8"))
-    ones_info = []  # (tensor_key, flat_idx, error)
-    for name, info in quant_meta.items():
-        if not (isinstance(info, dict) and info.get("type") == "int6"): continue
-        qk, sk = name + ".q", name + ".scale"
-        if qk not in quant_result or sk not in quant_result: continue
-        q, s = quant_result[qk], quant_result[sk]
-        if s.ndim > 0:
-            ones_mask = (q.abs() == 1)
-            if ones_mask.any():
-                row_idx = torch.arange(q.shape[0]).unsqueeze(1).expand_as(q)[ones_mask]
-                flat_idx = torch.arange(q.numel()).reshape(q.shape)[ones_mask]
-                errors = s.float()[row_idx].pow(2)
-                for fi, err in zip(flat_idx.tolist(), errors.tolist()):
-                    ones_info.append((qk, fi, err))
-    if ones_info:
-        ones_info.sort(key=lambda x: x[2])
-        def _try_prune(n):
-            tmp = {k: v.clone() for k, v in quant_result.items()}
-            for i in range(min(n, len(ones_info))):
-                tmp[ones_info[i][0]].view(-1)[ones_info[i][1]] = 0
-            buf = io.BytesIO(); torch.save({"w": tmp, "m": quant_meta}, buf)
-            return len(lzma.compress(buf.getvalue(), preset=9)) + code_bytes_est, tmp
-        no_sz, _ = _try_prune(0)
-        target_bytes = int(target_mb * 1024 * 1024)
-        log0(f"selective_prune: {len(ones_info)} ±1 candidates, unpruned={no_sz/(1024*1024):.2f}MB target={target_mb}MB")
-        if no_sz <= target_bytes:
-            log0("selective_prune: already fits, no pruning needed")
-        else:
-            full_sz, _ = _try_prune(len(ones_info))
-            log0(f"selective_prune: full ±1 prune={full_sz/(1024*1024):.2f}MB")
-            if full_sz > target_bytes:
-                log0("selective_prune: even full prune not enough, applying all")
-                _, quant_result = _try_prune(len(ones_info))
+    if args.use_int8_zlib:
+        log0("quant:int8+zlib mode (USE_INT8_ZLIB=1)")
+        quant_obj, quant_stats = quantize_state_dict_int8(unbanked_sd)
+        log0(f"int8_stats: param_count={quant_stats['param_count']} int8_bytes={quant_stats['int8_payload_bytes']}")
+        _quant_buf = io.BytesIO()
+        torch.save(quant_obj, _quant_buf)
+        _quant_blob = zlib.compress(_quant_buf.getvalue(), 9)
+        if master_process:
+            with open("final_model.int8.ptz", "wb") as _f:
+                _f.write(_quant_blob)
+            log0(f"Serialized model int8+zlib: {len(_quant_blob)} bytes")
+            _code_sz = len(code.encode("utf-8"))
+            log0(f"Total submission size int8+zlib: {len(_quant_blob) + _code_sz} bytes")
+        if distributed:
+            dist.barrier()
+        with open("final_model.int8.ptz", "rb") as _f:
+            _quant_blob_disk = _f.read()
+        _deq_obj = torch.load(io.BytesIO(zlib.decompress(_quant_blob_disk)), map_location="cpu")
+        deq_unbanked = dequantize_state_dict_int8(_deq_obj)
+        # Re-bank the dequantized tensors
+        deq_state = _rebank_state_dict(deq_unbanked, args.num_layers, sd_cpu)
+    else:
+        # Full GPTQ: collect Hessians via a temporary non-banked model
+        log0(f"gptq:building non-banked model for Hessian collection...")
+        hessian_model = _HessianGPT(
+            vocab_size=args.vocab_size, num_layers=args.num_layers, model_dim=args.model_dim,
+            num_heads=args.num_heads, num_kv_heads=args.num_kv_heads, mlp_mult=args.mlp_mult,
+            tie_embeddings=args.tie_embeddings, logit_softcap=args.logit_softcap,
+            rope_base=args.rope_base, qk_gain_init=args.qk_gain_init,
+            bigram_vocab_size=args.bigram_vocab_size, bigram_dim=args.bigram_dim,
+            xsa_last_n=args.xsa_last_n, rope_dims=args.rope_dims, ln_scale=args.ln_scale,
+            ve_enabled=args.ve_enabled, ve_dim=args.ve_dim, ve_layers=args.ve_layers,
+            recurrence_depth=args.recurrence_depth,
+            recurrence_start=args.recurrence_start,
+            recurrence_end=args.recurrence_end,
+        ).to(device).bfloat16()
+        for m in hessian_model.modules():
+            if isinstance(m, CastedLinear):
+                m.float()
+        restore_low_dim_params_to_fp32(hessian_model)
+        # Load unbanked weights into the non-banked model
+        hessian_model.load_state_dict(
+            {k: v.to(device) for k, v in unbanked_sd.items() if k in hessian_model.state_dict()},
+            strict=False,
+        )
+        # Autoregressive self-generated calibration (no external data)
+        log0("gptq:generating autoregressive calibration data (64 seqs x 2048 tokens, temp=0.8)...")
+        base_model.load_state_dict(export_sd, strict=False)
+        t_gen = time.perf_counter()
+        ar_tokens = generate_autoregressive_calib(
+            base_model, device, num_seqs=64, seq_len=args.train_seq_len,
+            vocab_size=args.vocab_size, temperature=0.8, batch_size=8, seed=args.seed,
+        )
+        log0(f"gptq:generated {len(ar_tokens)} sequences in {time.perf_counter()-t_gen:.1f}s")
+        log0("gptq:collecting hessians from autoregressive data...")
+        hessians = collect_hessians_from_tokens(hessian_model, ar_tokens, device)
+        log0(f"gptq:collected hessians for {len(hessians)} layers (AR self-gen)")
+        del ar_tokens
+        del hessian_model
+        torch.cuda.empty_cache()
+        quant_result, quant_meta = mixed_quantize_int6(unbanked_sd, {"mlp", "attn"}, hessians=hessians)
+        # NOVEL: Selective ±1 pruning by reconstruction error
+        # Sort ±1 quantized values by their reconstruction error (scale²),
+        # prune least-impactful first until artifact fits target size.
+        target_mb = float(os.environ.get("TARGET_MB", "15.9"))
+        code_bytes_est = len(code.encode("utf-8"))
+        ones_info = []  # (tensor_key, flat_idx, error)
+        for name, info in quant_meta.items():
+            if not (isinstance(info, dict) and info.get("type") == "int6"): continue
+            qk, sk = name + ".q", name + ".scale"
+            if qk not in quant_result or sk not in quant_result: continue
+            q, s = quant_result[qk], quant_result[sk]
+            if s.ndim > 0:
+                ones_mask = (q.abs() == 1)
+                if ones_mask.any():
+                    row_idx = torch.arange(q.shape[0]).unsqueeze(1).expand_as(q)[ones_mask]
+                    flat_idx = torch.arange(q.numel()).reshape(q.shape)[ones_mask]
+                    errors = s.float()[row_idx].pow(2)
+                    for fi, err in zip(flat_idx.tolist(), errors.tolist()):
+                        ones_info.append((qk, fi, err))
+        if ones_info:
+            ones_info.sort(key=lambda x: x[2])
+            def _try_prune(n):
+                tmp = {k: v.clone() for k, v in quant_result.items()}
+                for i in range(min(n, len(ones_info))):
+                    tmp[ones_info[i][0]].view(-1)[ones_info[i][1]] = 0
+                buf = io.BytesIO(); torch.save({"w": tmp, "m": quant_meta}, buf)
+                return len(lzma.compress(buf.getvalue(), preset=9)) + code_bytes_est, tmp
+            no_sz, _ = _try_prune(0)
+            target_bytes = int(target_mb * 1024 * 1024)
+            log0(f"selective_prune: {len(ones_info)} ±1 candidates, unpruned={no_sz/(1024*1024):.2f}MB target={target_mb}MB")
+            if no_sz <= target_bytes:
+                log0("selective_prune: already fits, no pruning needed")
             else:
-                lo, hi = 0, len(ones_info)
-                while lo < hi:
-                    mid = (lo + hi) // 2
-                    sz, _ = _try_prune(mid)
-                    if sz <= target_bytes: hi = mid
-                    else: lo = mid + 1
-                log0(f"selective_prune: pruning {lo}/{len(ones_info)} ±1 values ({100*lo/len(ones_info):.1f}%) to fit {target_mb}MB")
-                _, quant_result = _try_prune(lo)
-    quant_buf = io.BytesIO()
-    torch.save({"w": quant_result, "m": quant_meta}, quant_buf)
-    quant_raw = quant_buf.getvalue()
-    quant_blob = lzma.compress(quant_raw, preset=9)
-    if master_process:
-        with open("final_model.int6.ptz", "wb") as f:
-            f.write(quant_blob)
-        quant_file_bytes = len(quant_blob)
-        code_bytes = len(code.encode("utf-8"))
-        log0(f"Serialized model int6+lzma: {quant_file_bytes} bytes")
-        log0(f"Total submission size int6+lzma: {quant_file_bytes + code_bytes} bytes")
-    if distributed:
-        dist.barrier()
-    with open("final_model.int6.ptz", "rb") as f:
-        quant_blob_disk = f.read()
-    quant_state = torch.load(
-        io.BytesIO(lzma.decompress(quant_blob_disk)),
-        map_location="cpu",
-    )
-    deq_unbanked = dequantize_mixed_int6(quant_state["w"], quant_state["m"], unbanked_sd)
-    # Re-bank the dequantized tensors
-    deq_state = _rebank_state_dict(deq_unbanked, args.num_layers, sd_cpu)
+                full_sz, _ = _try_prune(len(ones_info))
+                log0(f"selective_prune: full ±1 prune={full_sz/(1024*1024):.2f}MB")
+                if full_sz > target_bytes:
+                    log0("selective_prune: even full prune not enough, applying all")
+                    _, quant_result = _try_prune(len(ones_info))
+                else:
+                    lo, hi = 0, len(ones_info)
+                    while lo < hi:
+                        mid = (lo + hi) // 2
+                        sz, _ = _try_prune(mid)
+                        if sz <= target_bytes: hi = mid
+                        else: lo = mid + 1
+                    log0(f"selective_prune: pruning {lo}/{len(ones_info)} ±1 values ({100*lo/len(ones_info):.1f}%) to fit {target_mb}MB")
+                    _, quant_result = _try_prune(lo)
+        quant_buf = io.BytesIO()
+        torch.save({"w": quant_result, "m": quant_meta}, quant_buf)
+        quant_raw = quant_buf.getvalue()
+        quant_blob = lzma.compress(quant_raw, preset=9)
+        if master_process:
+            with open("final_model.int6.ptz", "wb") as f:
+                f.write(quant_blob)
+            quant_file_bytes = len(quant_blob)
+            code_bytes = len(code.encode("utf-8"))
+            log0(f"Serialized model int6+lzma: {quant_file_bytes} bytes")
+            log0(f"Total submission size int6+lzma: {quant_file_bytes + code_bytes} bytes")
+        if distributed:
+            dist.barrier()
+        with open("final_model.int6.ptz", "rb") as f:
+            quant_blob_disk = f.read()
+        quant_state = torch.load(
+            io.BytesIO(lzma.decompress(quant_blob_disk)),
+            map_location="cpu",
+        )
+        deq_unbanked = dequantize_mixed_int6(quant_state["w"], quant_state["m"], unbanked_sd)
+        # Re-bank the dequantized tensors
+        deq_state = _rebank_state_dict(deq_unbanked, args.num_layers, sd_cpu)
     eval_model = GPT(
         vocab_size=args.vocab_size, num_layers=args.num_layers, model_dim=args.model_dim,
         num_heads=args.num_heads, num_kv_heads=args.num_kv_heads, mlp_mult=args.mlp_mult,
