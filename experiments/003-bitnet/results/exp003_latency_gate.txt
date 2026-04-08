@@ -1,0 +1,6 @@
+Experiment 003 BitNet latency benchmark
+config: device=cuda dtype=torch.bfloat16 steps=100 warmup_steps=10 batch_size=8 seq_len=1024 layers=11 model_dim=512 kv_dim=256 mlp_dim=1536
+dense: step_ms=53.88 elapsed_s=5.39 loss=2.1795 peak_mem_gb=1.53
+ternary: step_ms=72.91 elapsed_s=7.29 loss=2.7943 peak_mem_gb=1.59
+slowdown_pct=35.33
+fallback_hint=STE overhead exceeds 25%; downscale architecture before any full run.
