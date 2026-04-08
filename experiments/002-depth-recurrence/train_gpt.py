@@ -97,6 +97,7 @@ class Hyperparameters:
     # GPTQ calibration
     gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 256))
     gptq_block_size = int(os.environ.get("GPTQ_BLOCK_SIZE", 128))
+    export_mlp_prune_frac = float(os.environ.get("EXPORT_MLP_PRUNE_FRAC", 0.15))
     use_int8_zlib = bool(int(os.environ.get("USE_INT8_ZLIB", "0")))
     use_int8_lzma = bool(int(os.environ.get("USE_INT8_LZMA", "0")))
 
@@ -1358,6 +1359,60 @@ def _rebank_state_dict(sd: dict[str, Tensor], num_layers: int, template_sd: dict
             out[name] = tensor
     return out
 
+def _prune_smallest_magnitudes_(weight: Tensor, frac: float) -> int:
+    if weight.ndim != 2 or not weight.is_floating_point():
+        return 0
+    total = int(weight.numel())
+    prune_n = min(int(total * frac), total)
+    if prune_n <= 0:
+        return 0
+    flat = weight.view(-1)
+    abs_flat = flat.abs().float()
+    if prune_n >= total:
+        flat.zero_()
+        return total
+    kth = torch.kthvalue(abs_flat, prune_n).values
+    prune_mask = abs_flat < kth
+    missing = prune_n - int(prune_mask.sum().item())
+    if missing > 0:
+        tie_idx = torch.nonzero(abs_flat == kth, as_tuple=False).flatten()[:missing]
+        prune_mask[tie_idx] = True
+    flat[prune_mask] = 0.0
+    return int(prune_mask.sum().item())
+
+def apply_pre_export_mlp_pruning(
+    state_dict: dict[str, Tensor],
+    prune_frac: float,
+    log_fn,
+) -> dict[str, float | int]:
+    frac = float(prune_frac)
+    if frac <= 0.0:
+        log_fn("pre_export_prune:disabled frac<=0")
+        return {"tensor_count": 0, "pruned": 0, "total": 0, "actual_frac": 0.0}
+    tensor_count = 0
+    total_pruned = 0
+    total_weights = 0
+    for bank_name in ("mlp_up_bank", "mlp_down_bank"):
+        bank = state_dict.get(bank_name)
+        if bank is None or bank.ndim != 3 or not bank.is_floating_point():
+            continue
+        for layer_idx in range(bank.shape[0]):
+            tensor_count += 1
+            weight = bank[layer_idx]
+            total_weights += int(weight.numel())
+            total_pruned += _prune_smallest_magnitudes_(weight, frac)
+    actual_frac = total_pruned / total_weights if total_weights else 0.0
+    log_fn(
+        f"pre_export_prune:target_frac:{frac:.3f} tensors:{tensor_count} "
+        f"pruned:{total_pruned}/{total_weights} ({100.0 * actual_frac:.2f}%)"
+    )
+    return {
+        "tensor_count": tensor_count,
+        "pruned": total_pruned,
+        "total": total_weights,
+        "actual_frac": actual_frac,
+    }
+
 # --- Non-banked model for Hessian collection ---
 # This mirrors the unbanked state dict keys: blocks.{i}.attn.c_q/c_k/c_v/proj, blocks.{i}.mlp.fc/proj
 
@@ -2044,14 +2099,15 @@ def main() -> None:
     excluded_mtp = sum(int(t.numel()) for k, t in full_state_dict.items() if "mtp_heads" in k)
     if excluded_mtp > 0:
         log0(f"export_excluding_mtp_params:{excluded_mtp}")
+    sd_cpu = {k: v.detach().cpu() for k, v in export_sd.items()}
+    apply_pre_export_mlp_pruning(sd_cpu, args.export_mlp_prune_frac, log0)
     if master_process:
-        torch.save(export_sd, "final_model.pt")
+        torch.save(sd_cpu, "final_model.pt")
         model_bytes = os.path.getsize("final_model.pt")
         code_bytes = len(code.encode("utf-8"))
         log0(f"Serialized model: {model_bytes} bytes")
         log0(f"Code size: {code_bytes} bytes")
     # Unbank 3D tensors into individual 2D tensors for quantization
-    sd_cpu = {k: v.detach().cpu() for k, v in export_sd.items()}
     unbanked_sd = _unbank_state_dict(sd_cpu, args.num_layers)
     if args.use_int8_lzma:
         log0("quant:int8+lzma mode (USE_INT8_LZMA=1)")
@@ -2121,7 +2177,7 @@ def main() -> None:
         )
         # Autoregressive self-generated calibration (no external data)
         log0("gptq:generating autoregressive calibration data (64 seqs x 2048 tokens, temp=0.8)...")
-        base_model.load_state_dict(export_sd, strict=False)
+        base_model.load_state_dict(sd_cpu, strict=False)
         t_gen = time.perf_counter()
         ar_tokens = generate_autoregressive_calib(
             base_model, device, num_seqs=64, seq_len=args.train_seq_len,
