@@ -48,14 +48,15 @@ torchrun --standalone --nproc_per_node=8 experiments/002-depth-recurrence/train_
 | v11     | 1.2691  | —              | —               | >16MB ❌       | —      | EMA variant (no gain over v10) |
 | v12     | 1.3719  | 1.5015         | —               | 13.4MB ✅      | —      | WARMDOWN=3500, PRUNE_FRAC=0.15 — undertrained |
 | v13     | **1.2703** | **1.3600**  | —               | 17.3MB ❌      | —      | WARMDOWN=224, PRUNE_FRAC=0.15 — beats baseline BPB, 1.3MB over limit |
-| v14     | 1.2695  | **1.3586**     | ~654ms          | **15.82MB ✅** | b34acf6 | WARMDOWN=224, PRUNE_FRAC=0.27 — beats baseline BPB, fits under 16MB |
+| v14     | 1.2695  | 1.3586 (int8+lzma)     | ~654ms          | **15.82MB ✅** | b34acf6 | WARMDOWN=224, PRUNE_FRAC=0.27 — beats baseline BPB, fits under 16MB |
+| v15     | 1.2712  | 1.3811 (int6+lzma sw)  | ~665ms          | **11.31MB ✅** | —       | WARMDOWN=224, PRUNE_FRAC=0.37 — very compact, int6+lzma sw BPB worse than baseline |
 
 **Key insight:** WARMDOWN_ITERS=224 is critical. Default 3500 decays LR from step 1, collapsing quality. With 224, full LR holds until ~step 890. Pruned zeros compress well via LZMA.
 
 ## Analysis
 - Depth recurrence with shared middle layers (2..8, depth=2) beats baseline 1.3676 in raw val BPB.
-- Remaining challenge is purely compression: fitting artifact under 16MB with int8+lzma.
-- v14 (PRUNE_FRAC=0.27) fits: 15.82MB ✅, post-quant 1.3586, beats baseline 1.3676.
+- v14 (PRUNE_FRAC=0.27): 15.82MB ✅, int8+lzma BPB 1.3586 — beats baseline 1.3676. Best result so far.
+- v15 (PRUNE_FRAC=0.37): 11.31MB ✅ very compact, but int6+lzma sliding window BPB 1.3811 — worse than baseline. Over-pruning degraded quality.
 
 ## Status
 [x] Proposed by scout
