@@ -1993,6 +1993,7 @@ def main() -> None:
         f"reserved: {torch.cuda.max_memory_reserved() // 1024 // 1024} MiB"
     )
     # Apply weight averaging
+    pre_ema_val_bpb = val_bpb
     if args.lawa_enabled and len(lawa_queue) > 1:
         log0(f"lawa:applying LAWA averaging k={len(lawa_queue)}")
         current_state = base_model.state_dict()
@@ -2020,6 +2021,10 @@ def main() -> None:
         f"DIAGNOSTIC post_ema val_loss:{diag_val_loss:.4f} val_bpb:{diag_val_bpb:.4f} "
         f"eval_time:{1000.0 * (time.perf_counter() - t_diag):.0f}ms"
     )
+    if diag_val_bpb > pre_ema_val_bpb:
+        log0(f"ema:EMA is worse ({diag_val_bpb:.4f} > {pre_ema_val_bpb:.4f}), reverting to live checkpoint")
+        base_model.load_state_dict(current_state, strict=True)
+        diag_val_bpb = pre_ema_val_bpb
     full_state_dict = base_model.state_dict()
     export_sd = {k: v for k, v in full_state_dict.items() if "mtp_heads" not in k}
     excluded_mtp = sum(int(t.numel()) for k, t in full_state_dict.items() if "mtp_heads" in k)
