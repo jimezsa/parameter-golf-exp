@@ -98,6 +98,7 @@ class Hyperparameters:
     gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 256))
     gptq_block_size = int(os.environ.get("GPTQ_BLOCK_SIZE", 128))
     use_int8_zlib = bool(int(os.environ.get("USE_INT8_ZLIB", "0")))
+    use_int8_lzma = bool(int(os.environ.get("USE_INT8_LZMA", "0")))
 
 # --- Batched Newton-Schulz orthogonalization ---
 
@@ -2052,7 +2053,28 @@ def main() -> None:
     # Unbank 3D tensors into individual 2D tensors for quantization
     sd_cpu = {k: v.detach().cpu() for k, v in export_sd.items()}
     unbanked_sd = _unbank_state_dict(sd_cpu, args.num_layers)
-    if args.use_int8_zlib:
+    if args.use_int8_lzma:
+        log0("quant:int8+lzma mode (USE_INT8_LZMA=1)")
+        quant_obj, quant_stats = quantize_state_dict_int8(unbanked_sd)
+        log0(f"int8_stats: param_count={quant_stats['param_count']} int8_bytes={quant_stats['int8_payload_bytes']}")
+        _quant_buf = io.BytesIO()
+        torch.save(quant_obj, _quant_buf)
+        _quant_blob = lzma.compress(_quant_buf.getvalue(), preset=9)
+        if master_process:
+            with open("final_model.int8l.ptz", "wb") as _f:
+                _f.write(_quant_blob)
+            log0(f"Serialized model int8+lzma: {len(_quant_blob)} bytes")
+            _code_sz = len(code.encode("utf-8"))
+            log0(f"Total submission size int8+lzma: {len(_quant_blob) + _code_sz} bytes")
+        if distributed:
+            dist.barrier()
+        with open("final_model.int8l.ptz", "rb") as _f:
+            _quant_blob_disk = _f.read()
+        _deq_obj = torch.load(io.BytesIO(lzma.decompress(_quant_blob_disk)), map_location="cpu")
+        deq_unbanked = dequantize_state_dict_int8(_deq_obj)
+        # Re-bank the dequantized tensors
+        deq_state = _rebank_state_dict(deq_unbanked, args.num_layers, sd_cpu)
+    elif args.use_int8_zlib:
         log0("quant:int8+zlib mode (USE_INT8_ZLIB=1)")
         quant_obj, quant_stats = quantize_state_dict_int8(unbanked_sd)
         log0(f"int8_stats: param_count={quant_stats['param_count']} int8_bytes={quant_stats['int8_payload_bytes']}")
