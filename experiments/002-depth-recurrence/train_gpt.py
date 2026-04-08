@@ -1209,7 +1209,7 @@ def quantize_int6_gptq(weight, hessian=None, clip_range=31, block_size=128):
         return _quantize_int6_percentile(t32, clip_range)
     rows, cols = t32.shape
     H = hessian.float().clone()
-    dead = torch.diag(H) == 0
+    dead = torch.diag(H) < 1e-6 * torch.diag(H).abs().max().clamp_min(1e-10)
     H[dead, dead] = 1
     damp = 0.01 * torch.mean(torch.diag(H))
     H[torch.arange(cols), torch.arange(cols)] += damp
@@ -1218,9 +1218,21 @@ def quantize_int6_gptq(weight, hessian=None, clip_range=31, block_size=128):
     W = t32[:, perm].clone()
     W[:, dead[perm]] = 0
     H = H[perm][:, perm]
-    Hinv = torch.linalg.cholesky(H)
-    Hinv = torch.cholesky_inverse(Hinv)
-    Hinv = torch.linalg.cholesky(Hinv, upper=True)
+    # Adaptive Cholesky with escalating damping to handle ill-conditioned recurrent Hessians
+    for _extra_mult in [1, 4, 16, 64]:
+        try:
+            _H_try = H.clone()
+            if _extra_mult > 1:
+                _H_try.diagonal().add_(damp * (_extra_mult - 1))
+            Hinv = torch.linalg.cholesky(_H_try)
+            Hinv = torch.cholesky_inverse(Hinv)
+            Hinv = torch.linalg.cholesky(Hinv, upper=True)
+            if _extra_mult > 1:
+                print(f'gptq:cholesky succeeded with {_extra_mult}x damping for shape {H.shape}')
+            break
+        except Exception:
+            if _extra_mult == 64:
+                raise
     best_q = None; best_scale = None; best_err = float('inf')
     for pct in [0.9990, 0.9995, 0.9999, 0.99999, 1.0]:
         if pct < 1.0:
