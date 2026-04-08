@@ -2003,9 +2003,10 @@ def main() -> None:
             if delay_loss is not None and delay_loss > args.mtp_delay_kill_factor * main_only_loss:
                 log0(
                     f"mtp_delay_kill:triggered step:{step} main_loss:{main_only_loss.item():.4f} "
-                    f"delay_loss:{delay_loss.item():.4f} factor:{(delay_loss / main_only_loss).item():.3f}"
+                    f"delay_loss:{delay_loss.item():.4f} factor:{(delay_loss / main_only_loss).item():.3f} "
+                    f"continuing_without_delay_adapter"
                 )
-                stop_after_step = step
+                base_model.delay_adapter = None
         reached_cap = max_wallclock_ms is not None and approx_training_time_ms >= max_wallclock_ms
         if distributed and max_wallclock_ms is not None:
             reached_cap_tensor = torch.tensor(int(reached_cap), device=device)
