@@ -1633,7 +1633,6 @@ def dequantize_mixed_int6(result: dict[str, Tensor], meta: dict[str, object],
 # --- Training ---
 
 def main() -> None:
-    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     code = Path(__file__).read_text(encoding="utf-8")
     args = Hyperparameters()
     # zeropower_via_newtonschulz5 runs eagerly with bmm -- do NOT compile
