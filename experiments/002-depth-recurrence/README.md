@@ -40,13 +40,22 @@ RECURRENCE_END=8 \
 torchrun --standalone --nproc_per_node=8 experiments/002-depth-recurrence/train_gpt.py
 ```
 
-## Results
-| Run | BPB | Notes |
-|-----|-----|-------|
-|     |     | Pending human run |
+## Iteration Results
+
+| Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Description |
+|---------|---------|----------------|-----------------|---------------|--------|-------------|
+| v10     | 1.2686  | ~1.3537        | —               | >16MB ❌       | —      | Best uncompressed, WARMDOWN=224 |
+| v11     | 1.2691  | —              | —               | >16MB ❌       | —      | EMA variant (no gain over v10) |
+| v12     | 1.3719  | 1.5015         | —               | 13.4MB ✅      | —      | WARMDOWN=3500, PRUNE_FRAC=0.15 — undertrained |
+| v13     | **1.2703** | **1.3600**  | —               | 17.3MB ❌      | —      | WARMDOWN=224, PRUNE_FRAC=0.15 — beats baseline BPB, 1.3MB over limit |
+| v14     | TBD     | TBD            | TBD             | TBD           | —      | WARMDOWN=224, PRUNE_FRAC=0.27 — **RUNNING** |
+
+**Key insight:** WARMDOWN_ITERS=224 is critical. Default 3500 decays LR from step 1, collapsing quality. With 224, full LR holds until ~step 890. Pruned zeros compress well via LZMA.
 
 ## Analysis
-Implementation is complete. The next useful signal is a real 1xH100 run to check training stability, wallclock impact, and whether GPTQ calibration tolerates repeated block execution without memory issues.
+- Depth recurrence with shared middle layers (2..8, depth=2) beats baseline 1.3676 in raw val BPB.
+- Remaining challenge is purely compression: fitting artifact under 16MB with int8+lzma.
+- If v14 still too large, increase PRUNE_FRAC to 0.35–0.40.
 
 ## Status
 [x] Proposed by scout
