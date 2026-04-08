@@ -97,7 +97,7 @@ class Hyperparameters:
     # GPTQ calibration
     gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 256))
     gptq_block_size = int(os.environ.get("GPTQ_BLOCK_SIZE", 128))
-    export_mlp_prune_frac = float(os.environ.get("EXPORT_MLP_PRUNE_FRAC", 0.15))
+    export_mlp_prune_frac = float(os.environ.get("EXPORT_MLP_PRUNE_FRAC", 0.27))
     use_int8_zlib = bool(int(os.environ.get("USE_INT8_ZLIB", "0")))
     use_int8_lzma = bool(int(os.environ.get("USE_INT8_LZMA", "0")))
 
