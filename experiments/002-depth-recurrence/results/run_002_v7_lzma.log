@@ -1,0 +1,65 @@
+logs/exp002_v7_lzma.txt
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:80
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:26993756
+mtp_num_heads:0 mtp_loss_weight:0.2 mtp_params:0
+XSA:last_11 active_layers:[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+recurrence:depth:1 shared_layers:2-8
+world_size:1 grad_accum_steps:8
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:8 num_kv_heads:4
+tie_embeddings:True embed_lr:0.035 head_lr:0.0 matrix_lr:0.025 scalar_lr:0.025
+train_batch_tokens:786432 train_seq_len:2048 iterations:20000 warmup_steps:20 max_wallclock_seconds:600.000
+seed:1337
+warmup_step:1/20
+warmup_step:2/20
+warmup_step:3/20
+warmup_step:4/20
+warmup_step:5/20
+warmup_step:6/20
+warmup_step:7/20
+warmup_step:8/20
+warmup_step:9/20
+warmup_step:10/20
+warmup_step:11/20
+warmup_step:12/20
+warmup_step:13/20
+warmup_step:14/20
+warmup_step:15/20
+warmup_step:16/20
+warmup_step:17/20
+warmup_step:18/20
+warmup_step:19/20
+warmup_step:20/20
+step:0/20000 val_loss:6.9309 val_bpb:4.1049 train_time:0ms step_avg:0.01ms
+step:1/20000 train_loss:6.9313 train_time:1419ms step_avg:1418.51ms
+step:2/20000 train_loss:8.6943 train_time:2737ms step_avg:1368.43ms
+step:3/20000 train_loss:8.1275 train_time:4162ms step_avg:1387.39ms
+step:4/20000 train_loss:7.3972 train_time:5591ms step_avg:1397.87ms
+step:5/20000 train_loss:6.7779 train_time:7017ms step_avg:1403.33ms
+step:6/20000 train_loss:6.4247 train_time:8448ms step_avg:1408.07ms
+step:7/20000 train_loss:6.1432 train_time:9878ms step_avg:1411.14ms
+step:8/20000 train_loss:6.0181 train_time:11308ms step_avg:1413.45ms
+step:9/20000 train_loss:5.9640 train_time:12736ms step_avg:1415.09ms
+step:10/20000 train_loss:5.8983 train_time:14168ms step_avg:1416.85ms
+step:500/20000 train_loss:2.3665 train_time:391434ms step_avg:782.87ms
+swa:start step:550
+late_qat:enabled step:612 scale:0.1495
+step:823/20000 val_loss:2.2599 val_bpb:1.3384 train_time:600596ms step_avg:729.76ms
+stopping_early: wallclock_cap train_time:600596ms step:823/20000
+peak memory allocated: 23055 MiB reserved: 23196 MiB
+ema:applying EMA weights
+DIAGNOSTIC post_ema val_loss:2.5015 val_bpb:1.4816 eval_time:16298ms
+ema:EMA is worse (1.4816 > 1.3384), reverting to live checkpoint
+Serialized model: 106158518 bytes
+Code size: 110304 bytes
+quant:int8+lzma mode (USE_INT8_LZMA=1)
+int8_stats: param_count=26993756 int8_bytes=27256174
+Serialized model int8+lzma: 14078412 bytes
+Total submission size int8+lzma: 14188716 bytes
+final_int6_roundtrip val_loss:2.5218 val_bpb:1.4936 eval_time:20200ms
+final_int6_roundtrip_exact val_loss:2.52184576 val_bpb:1.49357911
+final_int6_sliding_window val_loss:2.4885 val_bpb:1.4738 stride:64 eval_time:590574ms
+final_int6_sliding_window_exact val_loss:2.48852576 val_bpb:1.47384903
+final_int8_zlib_roundtrip_exact val_loss:2.48852576 val_bpb:1.47384903
