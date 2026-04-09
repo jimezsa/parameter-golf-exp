@@ -54,6 +54,7 @@ torchrun --standalone --nproc_per_node=8 experiments/009-text-diffusion/train_gp
 |---------|---------|----------------|----------------|---------------|--------|-------------|
 | v1      | 1.5064  | GPTQ crash     | 899            | —             | 49fc2fb | Initial run — baseline config, 25% diffusion gate, diffusion weight 0.3 |
 | v2      | 1.4641  | 4.1046 (int6+lzma) | 840         | 4.43MB ✅     | 49fc2fb | MTP_DELAY_ENABLED=0, EMA_START_STEP=800, GPTQ Cholesky retry fix |
+| v3      | 1.2890  | **1.3320** (int6+lzma) | 763      | **11.47MB** ✅ | b207e41 | EMA_START_STEP=500, DIFFUSION_AUX_PROB=0.15, SWA at step 750 |
 
 - **Val BPB**: raw validation bits-per-byte before quantization (AR pass)
 - **Post-Quant BPB**: after int8+zlib (or int6+lzma if applicable)
@@ -72,15 +73,25 @@ torchrun --standalone --nproc_per_node=8 experiments/009-text-diffusion/train_gp
 - SWA started at step 50 (too early, same poisoning issue as exp 008 v1)
 - Artifact size 4.43MB is very compact (well under 16MB limit)
 
-### Next Steps for v3
-- Fix EMA: set `EMA_START_STEP` to ~500 (within the 715-step budget, capturing last ~200 steps)
-- Delay SWA start to match EMA start or later
-- Consider reducing diffusion auxiliary probability from 25% → 15% to free more steps for AR training
+### v2 → v3 Progress
+- **Massive improvement**: val_bpb 1.4641 → 1.2890 (−0.175), now beats baseline (1.3676) by 0.079
+- EMA fix worked: `EMA_START_STEP=500`, training reached step 787 → EMA collected ~287 steps. Post-EMA BPB 1.3221 (vs v2's broken 4.1044)
+- Post-quant int6+lzma: **1.3320** — beats baseline's post-quant reference (1.3700) by 0.038
+- Diffusion aux prob reduced 25% → 15%: faster steps (763ms vs 840ms), more steps completed (787 vs 715)
+- SWA start at step 750 (late, healthy averaging window)
+- Late QAT kicked in at step 754
+- Artifact 11.47MB, well under 16MB
+- Still trails exp 008 v6 (sw BPB 1.2716) — diffusion overhead costs ~0.06 BPB
+
+### Next Steps for v4
+- Try `DIFFUSION_AUX_PROB=0.10` or `0.05` to further reduce overhead and see if the diffusion benefit holds
+- Try `EMA_START_STEP=600` to narrow the averaging window (only warmdown phase)
+- Consider `WARMDOWN_ITERS=224` (exp 008 used this) to get more main training steps
 
 ## Status
 - [x] Proposed by scout
 - [x] Approved by professor
 - [x] Implemented by engineer
-- [ ] Tested by human / autoresearch
+- [x] Tested by human / autoresearch
 - [ ] Analyzed
 - [ ] Decision: adopt / discard / iterate
