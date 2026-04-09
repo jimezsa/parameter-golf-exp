@@ -109,6 +109,7 @@ class Hyperparameters:
     mtp_delay_kill_factor = float(os.environ.get("MTP_DELAY_KILL_FACTOR", 2.0))
     diffusion_loss_weight = float(os.environ.get("DIFFUSION_LOSS_WEIGHT", 0.3))
     diffusion_aux_prob = float(os.environ.get("DIFFUSION_AUX_PROB", 0.25))
+    diffusion_stop_frac = float(os.environ.get("DIFFUSION_STOP_FRAC", 1.0))  # fraction of wallclock after which diffusion is disabled (1.0 = never stop)
     # GPTQ calibration
     gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 256))
     gptq_block_size = int(os.environ.get("GPTQ_BLOCK_SIZE", 128))
@@ -1900,7 +1901,7 @@ def main() -> None:
     log0(f"mtp_num_heads:{args.mtp_num_heads} mtp_loss_weight:{args.mtp_loss_weight} mtp_params:{mtp_params}")
     log0(
         f"diffusion_aux:prob:{args.diffusion_aux_prob:.2f} "
-        f"weight:{args.diffusion_loss_weight:.4f} params:{diffusion_params}"
+        f"weight:{args.diffusion_loss_weight:.4f} stop_frac:{args.diffusion_stop_frac:.2f} params:{diffusion_params}"
     )
     if base_model.delay_adapter is not None:
         delay_params = sum(p.numel() for p in base_model.delay_adapter.parameters())
@@ -1981,6 +1982,7 @@ def main() -> None:
     stop_after_step: int | None = None
     last_x: Tensor | None = None
     last_y: Tensor | None = None
+    diffusion_cutoff_logged = False
     torch.cuda.synchronize()
     t0 = time.perf_counter()
     step = 0
@@ -2026,8 +2028,16 @@ def main() -> None:
             x, y = train_loader.next_batch(args.train_batch_tokens, args.train_seq_len, grad_accum_steps)
             last_x, last_y = x, y
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
+                diffusion_active = (
+                    args.diffusion_stop_frac >= 1.0
+                    or (max_wallclock_ms is not None and elapsed_ms < args.diffusion_stop_frac * max_wallclock_ms)
+                )
+                if not diffusion_active and not diffusion_cutoff_logged:
+                    log0(f"diffusion_cutoff:step:{step} elapsed_ms:{elapsed_ms:.0f} frac:{args.diffusion_stop_frac:.2f}")
+                    diffusion_cutoff_logged = True
                 use_diffusion = (
-                    args.diffusion_loss_weight > 0.0
+                    diffusion_active
+                    and args.diffusion_loss_weight > 0.0
                     and args.diffusion_aux_prob > 0.0
                     and random.random() < args.diffusion_aux_prob
                 )
