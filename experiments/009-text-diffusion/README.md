@@ -52,7 +52,8 @@ torchrun --standalone --nproc_per_node=8 experiments/009-text-diffusion/train_gp
 
 | Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Description |
 |---------|---------|----------------|----------------|---------------|--------|-------------|
-| v1      |         |                |                |               |        | Initial run — baseline config, 25% diffusion gate, diffusion weight 0.3 |
+| v1      | 1.5064  | GPTQ crash     | 899            | —             | 49fc2fb | Initial run — baseline config, 25% diffusion gate, diffusion weight 0.3 |
+| v2      | 1.4641  | 4.1046 (int6+lzma) | 840         | 4.43MB ✅     | 49fc2fb | MTP_DELAY_ENABLED=0, EMA_START_STEP=800, GPTQ Cholesky retry fix |
 
 - **Val BPB**: raw validation bits-per-byte before quantization (AR pass)
 - **Post-Quant BPB**: after int8+zlib (or int6+lzma if applicable)
@@ -62,7 +63,19 @@ torchrun --standalone --nproc_per_node=8 experiments/009-text-diffusion/train_gp
 - **Description**: what changed from the previous version
 
 ## Analysis
-Pending first run.
+
+### v1 → v2 Progress
+- val_bpb improved from 1.5064 → 1.4641 (−0.04), but still +0.10 above baseline (1.3676)
+- `MTP_DELAY_ENABLED=0` helped (known biggest win from exp 008), but less dramatic than exp 008's 1.39→1.27 jump — diffusion auxiliary overhead is eating into the benefit
+- **Critical bug:** `EMA_START_STEP=800` but training only reached step 715 (wallclock cap). EMA never started → post_ema BPB is 4.1044 (initial random weights). The int6+lzma roundtrip BPB of 4.1046 reflects this broken EMA, not the actual model quality
+- GPTQ Cholesky retry fix worked — no crash this time
+- SWA started at step 50 (too early, same poisoning issue as exp 008 v1)
+- Artifact size 4.43MB is very compact (well under 16MB limit)
+
+### Next Steps for v3
+- Fix EMA: set `EMA_START_STEP` to ~500 (within the 715-step budget, capturing last ~200 steps)
+- Delay SWA start to match EMA start or later
+- Consider reducing diffusion auxiliary probability from 25% → 15% to free more steps for AR training
 
 ## Status
 - [x] Proposed by scout
