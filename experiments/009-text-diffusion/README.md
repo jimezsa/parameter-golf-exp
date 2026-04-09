@@ -56,6 +56,7 @@ torchrun --standalone --nproc_per_node=8 experiments/009-text-diffusion/train_gp
 | v2      | 1.4641  | 4.1046 (int6+lzma) | 840         | 4.43MB ✅     | 49fc2fb | MTP_DELAY_ENABLED=0, EMA_START_STEP=800, GPTQ Cholesky retry fix |
 | v3      | 1.2890  | **1.3320** (int6+lzma) | 763      | **11.47MB** ✅ | b207e41 | EMA_START_STEP=500, DIFFUSION_AUX_PROB=0.15, SWA at step 750 |
 | v4      | 1.4830  | 2.0497 (int6+lzma) | 897         | 8.29MB ✅     | 49fc2fb | 13L/512d (+2 layers), VE_LAYERS=11,12, XSA_LAST_N=13 — regression, fewer steps (670 vs 787) |
+| v5      | 1.2775  | **1.2887** (int6+lzma) | 688      | **12.37MB** ✅ | 8fb0c2e | Minimal diffusion: DIFFUSION_AUX_PROB=0.05, weight=0.1, 11L. 873 steps, best post-quant |
 
 - **Val BPB**: raw validation bits-per-byte before quantization (AR pass)
 - **Post-Quant BPB**: after int8+zlib (or int6+lzma if applicable)
@@ -91,16 +92,28 @@ torchrun --standalone --nproc_per_node=8 experiments/009-text-diffusion/train_gp
 - EMA gap moderate (1.4830 → 1.5033 post-EMA), but starting from a much worse base
 - **Verdict: revert to 11L.** More layers within the same wallclock budget is counterproductive
 
-### Next Steps for v5
-- Stay at 11L/512d (same as v3)
-- Lower `DIFFUSION_AUX_PROB` from 0.15 → 0.08 (give more steps to pure AR)
-- Move `EMA_START_STEP` from 500 → 650 (tighter late averaging)
-- Reduce `DIFFUSION_LOSS_WEIGHT` from 0.3 → 0.15 (less diffusion influence)
+### v4 → v5 Breakthrough
+- **Major improvement**: val_bpb 1.4830 → 1.2775 (−0.206), post-quant sw BPB **1.2887** — best post-quant result for exp 009
+- Reverted to 11L/512d (v3 base), drastically reduced diffusion: `DIFFUSION_AUX_PROB=0.05`, `DIFFUSION_LOSS_WEIGHT=0.10`
+- 873 steps at 688ms/step — fastest config yet, more training steps within wallclock
+- Post-EMA BPB 1.3028 (gap 0.025) — EMA start working well
+- Quant degradation only **0.011** (1.2775 → 1.2887) — minimal diffusion acts as quantization regularizer
+- Beats baseline post-quant (1.3676) by **0.079**
+- Trails exp 008 v6 (1.2716) by 0.017 — diffusion overhead still costs slightly
+
+### Cross-Experiment Leaderboard (all int6+lzma sw BPB)
+
+| Rank | Experiment | Post-Quant sw BPB | Artifact |
+|------|-----------|-------------------|----------|
+| 1 | Exp 008 v6 | **1.2716** | 12.20MB ✅ |
+| 2 | Exp 009 v5 | 1.2887 | 12.37MB ✅ |
+| 3 | Exp 002 v14 | 1.3586 (int8+lzma) | 15.82MB ✅ |
+| 4 | Baseline | 1.3676 | — |
 
 ## Status
 - [x] Proposed by scout
 - [x] Approved by professor
 - [x] Implemented by engineer
 - [x] Tested by human / autoresearch
-- [ ] Analyzed
+- [x] Analyzed
 - [ ] Decision: adopt / discard / iterate
