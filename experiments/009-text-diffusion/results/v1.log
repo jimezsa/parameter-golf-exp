@@ -1,0 +1,109 @@
+logs/exp009_v1.txt
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:80
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:28174428
+mtp_num_heads:0 mtp_loss_weight:0.0 mtp_params:0
+diffusion_aux:prob:0.25 weight:0.3000 params:1024
+mtp_delay:enabled heads:4 hidden_dim:128 weight:0.3000 params:1179648 kill_after:5000 kill_factor:2.00
+XSA:last_11 active_layers:[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+world_size:1 grad_accum_steps:8
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:8 num_kv_heads:4
+tie_embeddings:True embed_lr:0.035 head_lr:0.0 matrix_lr:0.025 scalar_lr:0.025
+train_batch_tokens:786432 train_seq_len:2048 iterations:20000 warmup_steps:20 max_wallclock_seconds:600.000
+seed:1337
+warmup_step:1/20
+warmup_step:2/20
+warmup_step:3/20
+warmup_step:4/20
+warmup_step:5/20
+warmup_step:6/20
+warmup_step:7/20
+warmup_step:8/20
+warmup_step:9/20
+warmup_step:10/20
+warmup_step:11/20
+warmup_step:12/20
+warmup_step:13/20
+warmup_step:14/20
+warmup_step:15/20
+warmup_step:16/20
+warmup_step:17/20
+warmup_step:18/20
+warmup_step:19/20
+warmup_step:20/20
+step:0/20000 val_loss:6.9289 val_bpb:4.1037 train_time:0ms step_avg:0.02ms
+step:1/20000 train_loss:9.5280 train_time:866ms step_avg:866.16ms
+step:2/20000 train_loss:12.4025 train_time:1708ms step_avg:854.17ms
+step:3/20000 train_loss:10.7395 train_time:2382ms step_avg:794.08ms
+step:4/20000 train_loss:10.6359 train_time:3358ms step_avg:839.39ms
+step:5/20000 train_loss:10.1029 train_time:4437ms step_avg:887.39ms
+step:6/20000 train_loss:9.4674 train_time:5407ms step_avg:901.11ms
+step:7/20000 train_loss:8.8815 train_time:6266ms step_avg:895.15ms
+step:8/20000 train_loss:8.7199 train_time:7139ms step_avg:892.34ms
+step:9/20000 train_loss:8.2671 train_time:7919ms step_avg:879.87ms
+step:10/20000 train_loss:8.3471 train_time:8791ms step_avg:879.13ms
+swa:start step:50
+late_qat:enabled step:155 scale:0.1495
+step:500/20000 train_loss:3.8722 train_time:445283ms step_avg:890.57ms
+step:668/20000 val_loss:2.5435 val_bpb:1.5064 train_time:600573ms step_avg:899.06ms
+stopping_early: wallclock_cap train_time:600573ms step:668/20000
+peak memory allocated: 46633 MiB reserved: 46724 MiB
+ema:applying EMA weights
+DIAGNOSTIC post_ema val_loss:3.6717 val_bpb:2.1746 eval_time:16363ms
+export_excluding_training_only_params:1179648
+Serialized model: 106163192 bytes
+Code size: 111257 bytes
+gptq:building non-banked model for Hessian collection...
+gptq:generating autoregressive calibration data (64 seqs x 2048 tokens, temp=0.8)...
+gptq:generated 64 sequences in 212.8s
+gptq:collecting hessians from autoregressive data...
+gptq:collected hessians for 68 layers (AR self-gen)
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/workspace/parameter-golf/parameter-golf-exp/experiments/009-text-diffusion/train_gpt.py", line 2345, in <module>
+[rank0]:     main()
+[rank0]:   File "/workspace/parameter-golf/parameter-golf-exp/experiments/009-text-diffusion/train_gpt.py", line 2198, in main
+[rank0]:     quant_result, quant_meta = mixed_quantize_int6(unbanked_sd, {"mlp", "attn"}, hessians=hessians)
+[rank0]:                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/workspace/parameter-golf/parameter-golf-exp/experiments/009-text-diffusion/train_gpt.py", line 1654, in mixed_quantize_int6
+[rank0]:     q, s = quantize_int6_gptq(t, hessian=H, clip_range=cr)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/workspace/parameter-golf/parameter-golf-exp/experiments/009-text-diffusion/train_gpt.py", line 1326, in quantize_int6_gptq
+[rank0]:     Hinv = torch.linalg.cholesky(H)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]: torch._C._LinAlgError: linalg.cholesky: The factorization could not be completed because the input is not positive-definite (the leading minor of order 358 is not positive-definite).
+[rank0]:[W409 12:23:38.260306440 ProcessGroupNCCL.cpp:1524] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
+E0409 12:23:39.762000 1200 torch/distributed/elastic/multiprocessing/api.py:882] failed (exitcode: 1) local_rank: 0 (pid: 1269) of binary: /usr/local/bin/python
+Traceback (most recent call last):
+  File "/usr/local/bin/torchrun", line 7, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 357, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/run.py", line 936, in main
+    run(args)
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/run.py", line 927, in run
+    elastic_launch(
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/launcher/api.py", line 156, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/launcher/api.py", line 293, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+experiments/009-text-diffusion/train_gpt.py FAILED
+------------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-04-09_12:23:39
+  host      : 7480677c8b72
+  rank      : 0 (local_rank: 0)
+  exitcode  : 1 (pid: 1269)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================
