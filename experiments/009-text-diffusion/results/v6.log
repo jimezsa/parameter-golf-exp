@@ -1,0 +1,70 @@
+logs/exp009_v6.txt
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:80
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:26994780
+mtp_num_heads:0 mtp_loss_weight:0.0 mtp_params:0
+diffusion_aux:prob:0.10 weight:0.1500 stop_frac:0.50 params:1024
+XSA:last_11 active_layers:[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+world_size:1 grad_accum_steps:8
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:8 num_kv_heads:4
+tie_embeddings:True embed_lr:0.035 head_lr:0.0 matrix_lr:0.025 scalar_lr:0.025
+train_batch_tokens:786432 train_seq_len:2048 iterations:20000 warmup_steps:20 max_wallclock_seconds:600.000
+seed:1337
+warmup_step:1/20
+warmup_step:2/20
+warmup_step:3/20
+warmup_step:4/20
+warmup_step:5/20
+warmup_step:6/20
+warmup_step:7/20
+warmup_step:8/20
+warmup_step:9/20
+warmup_step:10/20
+warmup_step:11/20
+warmup_step:12/20
+warmup_step:13/20
+warmup_step:14/20
+warmup_step:15/20
+warmup_step:16/20
+warmup_step:17/20
+warmup_step:18/20
+warmup_step:19/20
+warmup_step:20/20
+step:0/20000 val_loss:6.9301 val_bpb:4.1044 train_time:0ms step_avg:0.01ms
+step:1/20000 train_loss:7.0610 train_time:737ms step_avg:737.13ms
+step:2/20000 train_loss:8.7788 train_time:1412ms step_avg:705.79ms
+step:3/20000 train_loss:8.2206 train_time:2066ms step_avg:688.68ms
+step:4/20000 train_loss:7.7690 train_time:2809ms step_avg:702.30ms
+step:5/20000 train_loss:7.1786 train_time:3550ms step_avg:710.07ms
+step:6/20000 train_loss:6.7824 train_time:4299ms step_avg:716.45ms
+step:7/20000 train_loss:6.5811 train_time:5136ms step_avg:733.73ms
+step:8/20000 train_loss:6.2296 train_time:5883ms step_avg:735.35ms
+step:9/20000 train_loss:6.0722 train_time:6626ms step_avg:736.23ms
+step:10/20000 train_loss:6.0691 train_time:7464ms step_avg:746.35ms
+swa:start step:150
+late_qat:enabled step:292 scale:0.1498
+diffusion_cutoff:step:412 elapsed_ms:300065 frac:0.50
+step:500/20000 train_loss:2.4682 train_time:357255ms step_avg:714.51ms
+step:873/20000 val_loss:2.3652 val_bpb:1.4008 train_time:600493ms step_avg:687.85ms
+stopping_early: wallclock_cap train_time:600493ms step:873/20000
+peak memory allocated: 45589 MiB reserved: 45744 MiB
+ema:applying EMA weights
+DIAGNOSTIC post_ema val_loss:2.3714 val_bpb:1.4045 eval_time:16364ms
+Serialized model: 106163192 bytes
+Code size: 112417 bytes
+gptq:building non-banked model for Hessian collection...
+gptq:generating autoregressive calibration data (64 seqs x 2048 tokens, temp=0.8)...
+gptq:generated 64 sequences in 197.4s
+gptq:collecting hessians from autoregressive data...
+gptq:collected hessians for 68 layers (AR self-gen)
+selective_prune: 9979575 ±1 candidates, unpruned=7.29MB target=15.9MB
+selective_prune: already fits, no pruning needed
+Serialized model int6+lzma: 7534436 bytes
+Total submission size int6+lzma: 7646853 bytes
+final_int6_roundtrip val_loss:3.1481 val_bpb:1.8645 eval_time:20780ms
+final_int6_roundtrip_exact val_loss:3.14810281 val_bpb:1.86448381
+final_int6_sliding_window val_loss:3.1078 val_bpb:1.8406 stride:64 eval_time:591181ms
+final_int6_sliding_window_exact val_loss:3.10781481 val_bpb:1.84062786
+final_int8_zlib_roundtrip_exact val_loss:3.10781481 val_bpb:1.84062786

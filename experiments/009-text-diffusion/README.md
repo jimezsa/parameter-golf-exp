@@ -57,6 +57,7 @@ torchrun --standalone --nproc_per_node=8 experiments/009-text-diffusion/train_gp
 | v3      | 1.2890  | **1.3320** (int6+lzma) | 763      | **11.47MB** ✅ | b207e41 | EMA_START_STEP=500, DIFFUSION_AUX_PROB=0.15, SWA at step 750 |
 | v4      | 1.4830  | 2.0497 (int6+lzma) | 897         | 8.29MB ✅     | 49fc2fb | 13L/512d (+2 layers), VE_LAYERS=11,12, XSA_LAST_N=13 — regression, fewer steps (670 vs 787) |
 | v5      | 1.2775  | **1.2887** (int6+lzma) | 688      | **12.37MB** ✅ | 8fb0c2e | Minimal diffusion: DIFFUSION_AUX_PROB=0.05, weight=0.1, 11L. 873 steps, best post-quant |
+| v6      | 1.4008  | 1.8406 (int6+lzma) | 688      | 7.65MB ✅ | 0980da8 | DIFF_PROB=0.10, weight=0.15, stop_frac=0.50. Regression — SWA@150 + missing EMA_START_STEP poisoned quant |
 
 - **Val BPB**: raw validation bits-per-byte before quantization (AR pass)
 - **Post-Quant BPB**: after int8+zlib (or int6+lzma if applicable)
@@ -100,6 +101,14 @@ torchrun --standalone --nproc_per_node=8 experiments/009-text-diffusion/train_gp
 - Quant degradation only **0.011** (1.2775 → 1.2887) — minimal diffusion acts as quantization regularizer
 - Beats baseline post-quant (1.3676) by **0.079**
 - Trails exp 008 v6 (1.2716) by 0.017 — diffusion overhead still costs slightly
+
+### v5 → v6 Regression
+- **Catastrophic regression**: val_bpb 1.2775 → 1.4008 (+0.123), sw BPB 1.2887 → 1.8406 (+0.552)
+- Config: `DIFF_PROB=0.10` (2× v5), `DIFF_WEIGHT=0.15`, `stop_frac=0.50` (diffusion off at step 412)
+- **Root cause: missing critical settings from v5.** SWA started at step 150 (v5 had 850), EMA_START_STEP=800 was not set, MTP heads zeroed out. Early-weight averaging poisoned quantization.
+- Diffusion schedule itself (cutoff at 50%) worked as intended for step speed recovery
+- **Result is uninformative about diffusion scheduling** — confounded by EMA/SWA regression
+- Artifact 7.65MB (compact, but useless at this BPB)
 
 ### Cross-Experiment Leaderboard (all int6+lzma sw BPB)
 
