@@ -110,6 +110,7 @@ class Hyperparameters:
     # GPTQ calibration
     gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 256))
     gptq_block_size = int(os.environ.get("GPTQ_BLOCK_SIZE", 128))
+    ema_start_step = int(os.environ.get("EMA_START_STEP", "0"))
 
 # --- Batched Newton-Schulz orthogonalization ---
 
@@ -1962,10 +1963,14 @@ def main() -> None:
         # Phase 3: Wait for RS, local NS5, all-gather (banks processed last)
         optimizer_muon.step()
         zero_grad_all()
-        # EMA update
+        # EMA update (delayed start if EMA_START_STEP > 0)
         with torch.no_grad():
-            for name, t in base_model.state_dict().items():
-                ema_state[name].mul_(ema_decay).add_(t.detach().float(), alpha=1.0 - ema_decay)
+            if step == args.ema_start_step and step > 0:
+                # Re-initialize EMA to current weights at the start step so we average only late-training weights
+                ema_state = {name: t.detach().float().clone() for name, t in base_model.state_dict().items()}
+            if step >= args.ema_start_step:
+                for name, t in base_model.state_dict().items():
+                    ema_state[name].mul_(ema_decay).add_(t.detach().float(), alpha=1.0 - ema_decay)
         step += 1
         approx_training_time_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
         if args.swa_enabled and scale < 0.2 and step % args.swa_every == 0:

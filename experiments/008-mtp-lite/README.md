@@ -30,6 +30,7 @@ Predicting the next two tokens (t+1 and t+2) improves sample efficiency. A singl
 | v1      | 1.4090  | 1.9482 (int6+lzma) | 687.76     | 7.41MB        | bafece4 | Initial run. EMA collapses to 1.5512 (SWA starts step 200, poisons average). GPTQ int6 broken on ternary. Only 873 steps in 10 min. |
 | v2      | 1.3922  | 1.4197 (int8+zlib) | 755        | ~14.3MB       | 9c5eb68 | WARMDOWN_ITERS=224 (SWA fix), MTP_DELAY_WEIGHT=0.1. SWA fix gave −0.017 BPB gain. 794 steps. |
 | v3      | **1.2686** | 1.3633 (int6+lzma sw) ✅ | 645 | **11.69MB** ✅ | 5b276a4 | MTP_DELAY_ENABLED=0. No delay adapter overhead → 930 steps. Sliding window BPB 1.3633 beats post-quant baseline (1.3700). |
+| v4      | **1.2680** | 1.3632 (int6+lzma sw) ✅ | 646 | **11.55MB** ✅ | — | LATE_QAT_THRESHOLD=0.3 → 67 QAT steps (2× v3). Tiny BPB gain (−0.0001). Post-EMA BPB=1.3753 — EMA averaging in early noisy weights throughout training. |
 
 ## Analysis
 
@@ -64,10 +65,20 @@ Predicting the next two tokens (t+1 and t+2) improves sample efficiency. A singl
 
 **Next**: v4 — `LATE_QAT_THRESHOLD=0.3`. Target: push sliding window BPB further below 1.3633.
 
+### v4 — LATE_QAT_THRESHOLD=0.3 (67 QAT steps)
+
+**What happened**: Doubling QAT steps (33→67) gave essentially no gain: val_bpb 1.2686→1.2680 (−0.0006), sliding window BPB 1.3633→1.3632 (−0.0001). Post-EMA BPB is 1.3753, a full 0.107 above training BPB (1.2680).
+
+**Root cause**: EMA accumulates from step 0 with decay=0.997 (half-life ~231 steps). Over 929 steps it averages in all early noisy training checkpoints. At step 929, roughly steps 700-929 dominate, but steps 0-700 still contribute meaningful weight. This degrades EMA quality. QAT threshold tuning has hit diminishing returns — the real bottleneck is the EMA averaging early-training noise.
+
+**Next**: v5 — `EMA_START_STEP=700`. Re-initialize EMA at step 700 to the current model weights, then average only the final ~229 warmdown steps. Expected: post-EMA BPB much closer to training BPB (1.2680), potentially better quantization.
+
+**EMA_START_STEP** is now implemented in `train_gpt.py`. Set `EMA_START_STEP=700` for v5.
+
 ## Status
 - [x] Proposed by scout
 - [x] Approved by professor
 - [x] Implemented by engineer
 - [x] Tested by human
-- [x] Analyzed (v1)
-- [ ] Decision: adopt / discard / iterate
+- [x] Analyzed (v1–v4)
+- [ ] Decision: adopt / discard / iterate (4/10+ iterations — continuing)
