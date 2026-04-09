@@ -22,6 +22,29 @@ Predicting the next two tokens (t+1 and t+2) improves sample efficiency. A singl
 - **GPU**: 1x H100 (dev) / 8x H100 (final)
 - **Steps / Duration**: 10 minutes (wallclock)
 - **Key hyperparameters changed**: Multi-token prediction loss activated, initial $\lambda_2 = 0.3$.
+- Data prep (run once per pod):
+```bash
+python3 data/cached_challenge_fineweb.py --variant sp1024
+```
+- Run from repo root (1x H100 dev):
+```bash
+RUN_ID=exp008_mtp_lite \
+SEED=1337 \
+torchrun --standalone --nproc_per_node=1 experiments/008-mtp-lite/train_gpt.py
+```
+- Run for final submission (8x H100):
+```bash
+RUN_ID=exp008_mtp_lite \
+SEED=1337 \
+torchrun --standalone --nproc_per_node=8 experiments/008-mtp-lite/train_gpt.py
+```
+
+## Key Metrics to Record
+1. **val_bpb** — final validation bits per byte before quantization
+2. **sw BPB** — sliding window BPB (authoritative post-quant metric)
+3. **Average step time** — mean ms/step from training logs
+4. **Total wallclock** — end-to-end training time
+5. **Compressed model size** — final artifact size in bytes (target ≤ 16MB)
 
 ## Iteration Results
 
@@ -32,7 +55,7 @@ Predicting the next two tokens (t+1 and t+2) improves sample efficiency. A singl
 | v3      | **1.2686** | 1.3633 (int6+lzma sw) ✅ | 645 | **11.69MB** ✅ | 5b276a4 | MTP_DELAY_ENABLED=0. No delay adapter overhead → 930 steps. Sliding window BPB 1.3633 beats post-quant baseline (1.3700). |
 | v4      | **1.2680** | 1.3632 (int6+lzma sw) ✅ | 646 | **11.55MB** ✅ | 364aacf | LATE_QAT_THRESHOLD=0.3 → 67 QAT steps (2× v3). Tiny BPB gain (−0.0001). Post-EMA BPB=1.3753 — EMA averaging in early noisy weights throughout training. |
 | v5      | **1.2681** | **1.2745** (int6+lzma sw) ✅ | 644 | **12.04MB** ✅ | dbf8877 | EMA_START_STEP=700 — EMA re-initialized at step 700, averages only final ~229 warmdown steps. Post-EMA BPB: **1.2900** (gap 0.107 → 0.019). Roundtrip: 1.2986. Sliding window: **1.2745** — dominant win. |
-| v6      | **1.2679** | **1.2716** (int6+lzma sw) ✅ | 644 | **12.20MB** ✅ | TBD | EMA_START_STEP=800 — tighter EMA window. Post-EMA BPB: **1.2855** (gap 0.0176). Roundtrip: 1.2956. Sliding window: **1.2716** — all metrics improved vs v5. |
+| v6      | **1.2679** | **1.2716** (int6+lzma sw) ✅ | 644 | **12.20MB** ✅ | 233fc96 | EMA_START_STEP=800 — tighter EMA window. Post-EMA BPB: **1.2855** (gap 0.0176). Roundtrip: 1.2956. Sliding window: **1.2716** — all metrics improved vs v5. |
 
 ## Analysis
 
@@ -103,4 +126,4 @@ Predicting the next two tokens (t+1 and t+2) improves sample efficiency. A singl
 - [x] Implemented by engineer
 - [x] Tested by human
 - [x] Analyzed (v1–v6)
-- [ ] Decision: adopt / discard / iterate (6/10+ iterations — continuing)
+- [x] Decision: **PAUSED** — 6/10+ iterations. Best sw BPB **1.2716** (v6, 12.20MB ✅), beats pre-GPTQ baseline (1.3676) by 0.096. Best quant: int6+lzma sw BPB **1.3632** (v4, 11.55MB ✅).
