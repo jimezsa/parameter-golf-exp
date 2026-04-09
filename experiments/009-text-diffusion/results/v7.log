@@ -1,0 +1,28 @@
+## Exp 009 v7 — Scheduled Diffusion (Scout recommendation)
+## Config: DIFF_PROB=0.08, DIFF_WEIGHT=0.10, STOP_FRAC=0.70, EMA_START_STEP=800, MTP_DELAY_ENABLED=0, WARMDOWN_ITERS=224
+## Command: RUN_ID=exp009_v7 SEED=1337 WARMDOWN_ITERS=224 EMA_START_STEP=800 MTP_DELAY_ENABLED=0 DIFFUSION_AUX_PROB=0.08 DIFFUSION_LOSS_WEIGHT=0.10 DIFFUSION_STOP_FRAC=0.70 torchrun --standalone --nproc_per_node=1 experiments/009-text-diffusion/train_gpt.py
+
+diffusion_aux:prob:0.08 weight:0.1000 stop_frac:0.70 params:1024
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+step:0/20000 val_loss:6.9301 val_bpb:4.1044 train_time:0ms step_avg:0.02ms
+step:1/20000 train_loss:7.0176 train_time:735ms step_avg:735.50ms
+step:2/20000 train_loss:8.7281 train_time:1410ms step_avg:704.80ms
+step:3/20000 train_loss:7.5958 train_time:2066ms step_avg:688.54ms
+step:4/20000 train_loss:7.3612 train_time:2808ms step_avg:702.10ms
+step:5/20000 train_loss:7.1534 train_time:3548ms step_avg:709.69ms
+step:6/20000 train_loss:7.1308 train_time:4291ms step_avg:715.22ms
+step:7/20000 train_loss:7.1664 train_time:5129ms step_avg:732.75ms
+step:8/20000 train_loss:6.8215 train_time:5873ms step_avg:734.11ms
+step:9/20000 train_loss:6.5135 train_time:6617ms step_avg:735.25ms
+step:10/20000 train_loss:6.2563 train_time:7455ms step_avg:745.53ms
+step:500/20000 train_loss:2.3222 train_time:356222ms step_avg:712.44ms
+step:867/20000 val_loss:2.1550 val_bpb:1.2763 train_time:600321ms step_avg:692.41ms
+DIAGNOSTIC post_ema val_loss:2.1728 val_bpb:1.2869 eval_time:16444ms
+Serialized model: 106163192 bytes
+Serialized model int6+lzma: 12450072 bytes
+Total submission size int6+lzma: 12562489 bytes
+final_int6_roundtrip val_loss:2.1932 val_bpb:1.2989 eval_time:20436ms
+final_int6_roundtrip_exact val_loss:2.19321760 val_bpb:1.29894700
+final_int6_sliding_window val_loss:2.1534 val_bpb:1.2753 stride:64 eval_time:592999ms
+final_int6_sliding_window_exact val_loss:2.15336800 val_bpb:1.27534920
+final_int8_zlib_roundtrip_exact val_loss:2.15336800 val_bpb:1.27534920

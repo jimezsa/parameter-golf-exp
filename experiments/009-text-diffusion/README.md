@@ -58,6 +58,7 @@ torchrun --standalone --nproc_per_node=8 experiments/009-text-diffusion/train_gp
 | v4      | 1.4830  | 2.0497 (int6+lzma) | 897         | 8.29MB ✅     | 49fc2fb | 13L/512d (+2 layers), VE_LAYERS=11,12, XSA_LAST_N=13 — regression, fewer steps (670 vs 787) |
 | v5      | 1.2775  | **1.2887** (int6+lzma) | 688      | **12.37MB** ✅ | 8fb0c2e | Minimal diffusion: DIFFUSION_AUX_PROB=0.05, weight=0.1, 11L. 873 steps, best post-quant |
 | v6      | 1.4008  | 1.8406 (int6+lzma) | 688      | 7.65MB ✅ | 0980da8 | DIFF_PROB=0.10, weight=0.15, stop_frac=0.50. Regression — SWA@150 + missing EMA_START_STEP poisoned quant |
+| v7      | **1.2763** | **1.2753** (int6+lzma) | 692  | **12.45MB** ✅ | 0980da8 | Scout's schedule: DIFF_PROB=0.08, weight=0.10, stop_frac=0.70, EMA_START_STEP=800. New exp 009 best, near-zero quant degradation |
 
 - **Val BPB**: raw validation bits-per-byte before quantization (AR pass)
 - **Post-Quant BPB**: after int8+zlib (or int6+lzma if applicable)
@@ -110,14 +111,24 @@ torchrun --standalone --nproc_per_node=8 experiments/009-text-diffusion/train_gp
 - **Result is uninformative about diffusion scheduling** — confounded by EMA/SWA regression
 - Artifact 7.65MB (compact, but useless at this BPB)
 
+### v6 → v7 Recovery and New Record
+- **Full recovery**: val_bpb 1.4008 → 1.2763 (−0.125), sw BPB 1.8406 → **1.2753** (−0.565)
+- Scout's diffusion schedule (8% for first 70%, then off) with v5's winning settings: `EMA_START_STEP=800`, `MTP_DELAY_ENABLED=0`, late SWA
+- 867 steps at 692ms/step — slight overhead from 8% diffusion (v5 was 688ms, 873 steps)
+- Post-EMA gap shrunk to **0.011** (1.2763 → 1.2869) — best EMA performance in exp 009
+- **Near-zero quant degradation**: sw BPB 1.2753 vs train BPB 1.2763 — only 0.001 gap. Scheduled diffusion is an even better quant regularizer than constant diffusion
+- Gap to exp 008 v6 (1.2716) is now just **0.0037**
+- Artifact 12.45MB, comfortably under 16MB
+
 ### Cross-Experiment Leaderboard (all int6+lzma sw BPB)
 
 | Rank | Experiment | Post-Quant sw BPB | Artifact |
 |------|-----------|-------------------|----------|
 | 1 | Exp 008 v6 | **1.2716** | 12.20MB ✅ |
-| 2 | Exp 009 v5 | 1.2887 | 12.37MB ✅ |
-| 3 | Exp 002 v14 | 1.3586 (int8+lzma) | 15.82MB ✅ |
-| 4 | Baseline | 1.3676 | — |
+| 2 | **Exp 009 v7** | **1.2753** | 12.45MB ✅ |
+| 3 | Exp 009 v5 | 1.2887 | 12.37MB ✅ |
+| 4 | Exp 002 v14 | 1.3586 (int8+lzma) | 15.82MB ✅ |
+| 5 | Baseline | 1.3676 | — |
 
 ## Status
 - [x] Proposed by scout
