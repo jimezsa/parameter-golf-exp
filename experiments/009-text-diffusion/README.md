@@ -2,33 +2,67 @@
 
 ## Paper / Source
 - **Titles**:
-  1. *A Cheaper and Better Diffusion Language Model with Soft-Masked Noise* (Chen et al., 2023) - [Link](https://arxiv.org/abs/2304.04746)
-  2. *Text Generation with Diffusion Language Models: A Pre-training Approach with Continuous Paragraph Denoise* (Lin et al., 2022) - [Link](https://arxiv.org/abs/2212.11685)
-  3. *A Reparameterized Discrete Diffusion Model for Text Generation* (Zheng et al., 2023) - [Link](https://arxiv.org/abs/2302.05737)
-- **Key idea**: Pure Text Diffusion models suffer from sample inefficiency because they predict a masked subset of tokens at a uniform timestep $t$, unlike Autoregressive (AR) models which receive dense gradients for all $N$ tokens simultaneously. By combining Soft-Masked Diffusion with an AR-Diffusion Hybrid approach, we impart rich, bidirectional structural context probabilistically (e.g., 25% of steps) without sacrificing the exact next-token BPB metric optimization and wallclock constraints.
+  1. *A Cheaper and Better Diffusion Language Model with Soft-Masked Noise* (Chen et al., 2023) — https://arxiv.org/abs/2304.04746
+  2. *Text Generation with Diffusion Language Models: A Pre-training Approach with Continuous Paragraph Denoise* (Lin et al., 2022) — https://arxiv.org/abs/2212.11685
+  3. *A Reparameterized Discrete Diffusion Model for Text Generation* (Zheng et al., 2023) — https://arxiv.org/abs/2302.05737
+- **Key idea**: Pure diffusion LMs suffer from sample inefficiency — they predict only a masked subset per step. This hybrid injects a bidirectional soft-masked auxiliary pass on ~25% of steps, adding structural context without doubling step time or changing the primary AR BPB objective.
 
 ## Hypothesis
-Within a 10-minute training wallclock, pure diffusion will underfit. However, injecting an auxiliary bidirectional diffusion pass (using soft-masked embeddings and time projections) on ~25% of training steps will improve structural representations without doubling the step time, leading to a better final BPB compared to the pure AR baseline.
-
-## Base Code
-- **Fork from**: `experiments/008-mtp-lite/train_gpt.py` (MTP-Lite with parameter banking and EMA).
+Within a 10-minute wallclock, pure diffusion underfits. An auxiliary bidirectional diffusion pass (25% of steps) improves structural representations and yields better final BPB than a pure AR baseline, while keeping step time within budget.
 
 ## Changes from Baseline
-- **Architecture**:
-  - `mask_embed`: A learned embedding for corrupting input tokens.
-  - `time_proj`: A lightweight projection of a continuous timestep $t \sim U(0,1)$ added to the residual stream before attention in each block.
-- **Dual Head / Dual Pass**:
-  - **AR Pass (Primary)**: Standard causal masking (`is_causal=True`) computed on 100% of steps for exact BPB scoring and MTP loss.
-  - **Diffusion Pass (Auxiliary)**: Runs probabilistically (~25% of steps). Uses bidirectional attention (`is_causal=False`) on a soft-masked sequence to predict the uncorrupted tokens.
-- **Compute Constraint**: Diffusion pass is limited to ~25% execution rate to ensure the training script completes within the 10-minute 8xH100 wallclock limit.
+Fork from `experiments/008-mtp-lite/train_gpt.py` (MTP-Lite with parameter banking and EMA).
+
+- **Architecture additions**:
+  - `mask_embed`: learned embedding for soft token corruption
+  - `time_proj`: lightweight projection of continuous timestep $t \sim U(0,1)$, added to the residual stream before each attention block
+- **Dual-pass training**:
+  - AR pass (primary): causal masking (`is_causal=True`), runs 100% of steps, drives BPB and MTP loss
+  - Diffusion pass (auxiliary): bidirectional attention (`is_causal=False`) on soft-masked sequence, runs ~25% of steps
+- **Diffusion loss weight**: 0.3
 
 ## Run Config
 - **GPU**: 1x H100 (dev) / 8x H100 (final)
-- **Steps / Duration**: 10 minutes (wallclock)
-- **Key hyperparameters changed**:
-  - `is_causal` dynamic toggle added to `CausalSelfAttention` and `Block`.
-  - Probabilistic auxiliary diffusion step (25% frequency).
-  - Diffusion loss weight: 0.3.
+- **Steps / Duration**: 10 minutes wallclock
+- Data prep (run once per pod):
+```bash
+python3 data/cached_challenge_fineweb.py --variant sp1024
+```
+- Run from repo root (1x H100 dev):
+```bash
+RUN_ID=exp009_text_diffusion \
+SEED=1337 \
+torchrun --standalone --nproc_per_node=1 experiments/009-text-diffusion/train_gpt.py
+```
+- Run for final submission (8x H100):
+```bash
+RUN_ID=exp009_text_diffusion \
+SEED=1337 \
+torchrun --standalone --nproc_per_node=8 experiments/009-text-diffusion/train_gpt.py
+```
+
+## Key Metrics to Record
+1. **val_bpb** — final validation bits per byte (AR pass, primary metric)
+2. **sw BPB** — sliding window BPB (authoritative post-quant metric)
+3. **Average step time** — mean ms/step from training logs
+4. **Total wallclock** — end-to-end training time
+5. **Compressed model size** — final artifact size in bytes (target ≤ 16MB)
+
+## Iteration Results
+
+| Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Description |
+|---------|---------|----------------|----------------|---------------|--------|-------------|
+| v1      |         |                |                |               |        | Initial run — baseline config, 25% diffusion gate, diffusion weight 0.3 |
+
+- **Val BPB**: raw validation bits-per-byte before quantization (AR pass)
+- **Post-Quant BPB**: after int8+zlib (or int6+lzma if applicable)
+- **Step Time**: average training step time in ms
+- **Artifact Size**: compressed model size (target ≤ 16MB)
+- **Commit**: short SHA of the code version used
+- **Description**: what changed from the previous version
+
+## Analysis
+Pending first run.
 
 ## Status
 - [x] Proposed by scout
