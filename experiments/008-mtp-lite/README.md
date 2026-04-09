@@ -32,6 +32,7 @@ Predicting the next two tokens (t+1 and t+2) improves sample efficiency. A singl
 | v3      | **1.2686** | 1.3633 (int6+lzma sw) ✅ | 645 | **11.69MB** ✅ | 5b276a4 | MTP_DELAY_ENABLED=0. No delay adapter overhead → 930 steps. Sliding window BPB 1.3633 beats post-quant baseline (1.3700). |
 | v4      | **1.2680** | 1.3632 (int6+lzma sw) ✅ | 646 | **11.55MB** ✅ | 364aacf | LATE_QAT_THRESHOLD=0.3 → 67 QAT steps (2× v3). Tiny BPB gain (−0.0001). Post-EMA BPB=1.3753 — EMA averaging in early noisy weights throughout training. |
 | v5      | **1.2681** | **1.2745** (int6+lzma sw) ✅ | 644 | **12.04MB** ✅ | dbf8877 | EMA_START_STEP=700 — EMA re-initialized at step 700, averages only final ~229 warmdown steps. Post-EMA BPB: **1.2900** (gap 0.107 → 0.019). Roundtrip: 1.2986. Sliding window: **1.2745** — dominant win. |
+| v6      | **1.2679** | **1.2716** (int6+lzma sw) ✅ | 644 | **12.20MB** ✅ | TBD | EMA_START_STEP=800 — tighter EMA window. Post-EMA BPB: **1.2855** (gap 0.0176). Roundtrip: 1.2956. Sliding window: **1.2716** — all metrics improved vs v5. |
 
 ## Analysis
 
@@ -82,14 +83,24 @@ Predicting the next two tokens (t+1 and t+2) improves sample efficiency. A singl
 
 **Key insight**: The EMA start step was the dominant bottleneck for quantization quality. Early-training noisy weights were poisoning the averaged model. Starting EMA at step 700 (just before warmdown begins) gives the quantizer a clean, converged model to work with.
 
-**Remaining gap**: Sliding window BPB 1.2745 is well below the pre-GPTQ baseline (1.3676) and even below training BPB (1.2681). The 0.019 residual post-EMA gap (training 1.2681 → EMA 1.2900) is still worth closing. Candidate: EMA_START_STEP=750 or 800 to average only the deepest warmdown steps. Also consider whether the 10-min training budget could be extended to 1000+ steps with further step time optimization.
+**Remaining gap**: Sliding window BPB 1.2745 is well below the pre-GPTQ baseline (1.3676) and even below training BPB (1.2681). The 0.019 residual post-EMA gap (training 1.2681 → EMA 1.2900) is still worth closing. Candidate: EMA_START_STEP=750 or 800 to average only the deepest warmdown steps.
 
-**Next**: v6 — `EMA_START_STEP=800` to tighten EMA window further. Expect post-EMA BPB to approach training BPB (~1.268) and sliding window BPB to dip below 1.27.
+**Next**: v6 — `EMA_START_STEP=800` to tighten EMA window further.
+
+### v6 — EMA_START_STEP=800
+
+**What happened**: Further improvement across all metrics. Post-EMA BPB: **1.2855** (gap 0.0176, down from 0.019 in v5). int6+lzma roundtrip BPB: **1.2956**. Sliding window BPB: **1.2716** — the authoritative metric, −0.003 vs v5. Artifact: 12.20MB ✅.
+
+**Key result**: Tightening the EMA window from 700→800 consistently improved every metric. The diminishing returns are small — sw BPB 1.2745 → 1.2716 (−0.003). The 0.0176 residual post-EMA gap suggests the EMA window is now well-tuned; further tightening (e.g., 850) would give marginal gains. The training BPB itself (1.2679) has nearly plateaued.
+
+**Analysis**: sw BPB 1.2716 beats baseline (1.3676) by 0.096 — strong result. Main remaining question: is there a different angle with higher upside than continuing EMA step tuning? Candidates: step time optimization (more steps in 10 min), larger QAT window, or architecture changes.
+
+**Next**: Evaluate whether to continue EMA_START_STEP tuning (750→850 sweep) or shift focus to a different lever (step time, architecture). Report to professor for verdict after further consideration.
 
 ## Status
 - [x] Proposed by scout
 - [x] Approved by professor
 - [x] Implemented by engineer
 - [x] Tested by human
-- [x] Analyzed (v1–v5)
-- [ ] Decision: adopt / discard / iterate (5/10+ iterations — continuing)
+- [x] Analyzed (v1–v6)
+- [ ] Decision: adopt / discard / iterate (6/10+ iterations — continuing)
