@@ -23,18 +23,29 @@ Predicting the next two tokens (t+1 and t+2) improves sample efficiency. A singl
 - **Steps / Duration**: 10 minutes (wallclock)
 - **Key hyperparameters changed**: Multi-token prediction loss activated, initial $\lambda_2 = 0.3$.
 
-## Results
-| Run | BPB | Notes |
-|-----|-----|-------|
-|     |     |       |
+## Iteration Results
+
+| Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Description |
+|---------|---------|----------------|-----------------|---------------|--------|-------------|
+| v1      | 1.4090  | 1.9482 (int6+lzma) | 687.76     | 7.41MB        | bafece4 | Initial run. EMA collapses to 1.5512 (SWA starts step 200, poisons average). GPTQ int6 broken on ternary. Only 873 steps in 10 min. |
 
 ## Analysis
-What worked, what didn't, why.
+
+### v1 (bafece4) — baseline run
+
+**What happened**: val_bpb=1.4090 pre-EMA, but EMA/SWA degrades it to 1.5512 (+0.14 BPB). GPTQ int6+lzma roundtrip is 1.9482 — catastrophic. Only 873 steps in 10 min at 687ms/step.
+
+**Root causes**:
+1. **EMA collapse**: SWA starts at step 200, runs to step 873. Most of the 673 averaged steps are still mid-learning (train_loss=4.49 at step 500). Early noisy checkpoints poison the average. Fix: push SWA start to step ~750.
+2. **GPTQ int6 broken**: Ternary weights trained with STE don't survive GPTQ int6 post-hoc quantization. Use int8+zlib for dev iterations (per established protocol).
+3. **MTP benefit invisible**: 873 steps is too few to evaluate whether the delay adapter (1.18M params, weight=0.3) helps. Need more steps or a faster base.
+
+**Next**: v2 — add `SWA_START_STEP` env var (request codex), set to ~750. Drop `mtp_delay_weight` 0.3 → 0.1.
 
 ## Status
 - [x] Proposed by scout
 - [x] Approved by professor
 - [x] Implemented by engineer
-- [ ] Tested by human
-- [ ] Analyzed
+- [x] Tested by human
+- [x] Analyzed (v1)
 - [ ] Decision: adopt / discard / iterate
