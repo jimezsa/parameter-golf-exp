@@ -947,7 +947,7 @@ class GPT(nn.Module):
         self.recurrence_depth = recurrence_depth
         self.recurrence_start = recurrence_start
         self.recurrence_end = recurrence_end
-        self.recurrence_active = False  # toggled from training loop after warmup fraction
+        # recurrence is always active when depth > 1 (no runtime toggle — incompatible with torch.compile fullgraph=True)
         if recurrence_depth > 1:
             n_enc = num_layers // 2
             if recurrence_end < n_enc:
@@ -1100,7 +1100,7 @@ class GPT(nn.Module):
         n_enc = self.num_encoder_layers
         rec_start = self.recurrence_start
         rec_end = self.recurrence_end
-        do_recur = self.recurrence_active and self.recurrence_depth > 1
+        do_recur = self.recurrence_depth > 1
 
         # --- Encoder layers ---
         for i in range(n_enc):
@@ -2094,15 +2094,7 @@ def main() -> None:
                 )
             break
         elapsed_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
-        # Activate depth recurrence after warmup fraction
-        if (
-            args.recurrence_depth > 1
-            and not base_model.recurrence_active
-            and max_wallclock_ms is not None
-            and elapsed_ms >= args.recurrence_start_frac * max_wallclock_ms
-        ):
-            base_model.recurrence_active = True
-            log0(f"recurrence:activated step:{step} elapsed_ms:{elapsed_ms:.0f} depth:{args.recurrence_depth} layers:[{args.recurrence_start},{args.recurrence_end}]")
+        # Depth recurrence is always-on when depth > 1 (no runtime toggle — torch.compile fullgraph=True incompatible)
         scale = lr_mul(step, elapsed_ms)
         if args.late_qat_threshold > 0 and scale < args.late_qat_threshold and not CastedLinear._qat_enabled:
             CastedLinear._qat_enabled = True
