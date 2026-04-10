@@ -130,10 +130,37 @@ torchrun --standalone --nproc_per_node=8 experiments/009-text-diffusion/train_gp
 | 4 | Exp 002 v14 | 1.3586 (int8+lzma) | 15.82MB ✅ |
 | 5 | Baseline | 1.3676 | — |
 
+## 8x H100 Submission Run
+
+| Metric | 1x H100 (v7 dev) | 8x H100 (v7 final) | Delta |
+|--------|-------------------|---------------------|-------|
+| GPUs | 1x H100 SXM | 8x H100 SXM | — |
+| Steps | 867 | 6441 | 7.4× |
+| Step avg (ms) | 692 | 93.16 | 7.4× faster |
+| Batch tokens | 98,304 | 786,432 | 8× |
+| val_bpb (raw) | 1.2763 | 1.1396 | −0.137 |
+| post_ema val_bpb | 1.2869 | 1.1386 | −0.148 |
+| int6 roundtrip BPB | — | 1.1424 | — |
+| **int6 sw BPB** | **1.2753** | **1.1189** | **−0.156** |
+| int6+lzma model | 12.45MB | 15.03MB | +2.58MB |
+| Total submission | — | **15.13MB ✅** | under 16MB |
+| Diffusion cutoff | step ~607 (70%) | step 4386 (70%) | — |
+| SWA start | — | step 5700 | — |
+| Late QAT start | — | step 5884 | — |
+| Peak VRAM | — | 45.4 GB/GPU | — |
+| Wallclock | 600s | 600s | — |
+
+**Key observations:**
+- 7.4× more training steps produces −0.156 BPB improvement (1.2753 → 1.1189 sw)
+- Only **0.004 from SOTA** (1.1147) — the closest any experiment has gotten
+- Near-zero quant degradation maintained at scale: post-EMA 1.1386 → sw 1.1189 (sw improves over roundtrip as expected)
+- Artifact 15.13MB fits comfortably under 16MB limit
+- Diffusion schedule scaled correctly: cutoff at step 4386 (70% of 6263 effective steps)
+
 ## Status
 - [x] Proposed by scout
 - [x] Approved by professor
 - [x] Implemented by engineer
 - [x] Tested by human / autoresearch
 - [x] Analyzed
-- [ ] Decision: adopt / discard / iterate
+- [x] Decision: **adopt** — v7 is the submission candidate (sw BPB 1.1189, 0.004 from SOTA)
