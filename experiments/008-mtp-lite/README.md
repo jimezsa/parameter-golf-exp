@@ -120,10 +120,24 @@ torchrun --standalone --nproc_per_node=8 experiments/008-mtp-lite/train_gpt.py
 
 **Next**: Evaluate whether to continue EMA_START_STEP tuning (750→850 sweep) or shift focus to a different lever (step time, architecture). Report to professor for verdict after further consideration.
 
+### v6 8xH100 — submission-scale run
+
+**What happened**: Scaling from 1xH100 → 8xH100 produced a massive improvement. 6866 steps at 87.40ms/step (vs 930 steps at 644ms on 1xH100). val_bpb: **1.1729** (post-EMA: **1.1634**). GPTQ int6+lzma required pruning (unpruned 16.36MB → pruned 15.46MB). Final sliding window BPB: **1.1189**. Roundtrip BPB: 1.1424. Artifact: **15.87MB** ✅ (15,868,409 bytes).
+
+**Key result**: sw BPB **1.1189** — identical to exp 009 v7's 8xH100 result. Both experiments converge to the same number at submission scale, just 0.004 from SOTA (1.1147). Exp 009 has a smaller artifact (15.13 vs 15.87MB) due to needing less pruning.
+
+## 8xH100 Results (submission scale)
+
+| Experiment | sw BPB | Roundtrip BPB | Post-EMA BPB | val_bpb | Steps | Step Avg | Artifact | Delta to SOTA |
+|-----------|--------|---------------|-------------|---------|-------|----------|----------|---------------|
+| **Exp 008 v6** | **1.1189** | 1.1424 | 1.1634 | 1.1729 | 6866 | 87.40ms | **15.87MB** ✅ | +0.0042 |
+| Exp 009 v7 | **1.1189** | 1.1424 | 1.1386 | 1.1396 | 6441 | 93ms | **15.13MB** ✅ | +0.0042 |
+
 ## Status
 - [x] Proposed by scout
 - [x] Approved by professor
 - [x] Implemented by engineer
 - [x] Tested by human
 - [x] Analyzed (v1–v6)
-- [x] Decision: **PAUSED** — 6/10+ iterations. Best sw BPB **1.2716** (v6, 12.20MB ✅), beats pre-GPTQ baseline (1.3676) by 0.096. Best quant: int6+lzma sw BPB **1.3632** (v4, 11.55MB ✅).
+- [x] 8xH100 submission run — sw BPB **1.1189**, artifact 15.87MB ✅
+- [x] Decision: **PAUSED** — 6/10+ iterations. Best 1xH100 sw BPB **1.2716** (v6, 12.20MB ✅). Best 8xH100 sw BPB **1.1189** (v6, 15.87MB ✅) — 0.004 from SOTA.
