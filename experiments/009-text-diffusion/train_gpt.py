@@ -114,6 +114,7 @@ class Hyperparameters:
     gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 256))
     gptq_block_size = int(os.environ.get("GPTQ_BLOCK_SIZE", 128))
     ema_start_step = int(os.environ.get("EMA_START_STEP", "0"))
+    parallel_start_layer = int(os.environ.get("PARALLEL_START_LAYER", 7))  # layers >= this use parallel residuals
 
 # --- Batched Newton-Schulz orthogonalization ---
 
@@ -780,8 +781,10 @@ class Block(nn.Module):
         dtg: bool = False,
         gated_attention: bool = False,
         value_residual: bool = False,
+        parallel: bool = False,
     ):
         super().__init__()
+        self.parallel = parallel
         self.attn_norm = RMSNorm()
         self.mlp_norm = RMSNorm()
         self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base, qk_gain_init,
@@ -826,8 +829,14 @@ class Block(nn.Module):
             v0=v0,
             is_causal=is_causal,
         )
-        x_out = x_in + self.attn_scale.to(dtype=x_in.dtype)[None, None, :] * attn_out
-        x_out = x_out + self.mlp_scale.to(dtype=x_out.dtype)[None, None, :] * self.mlp(self.mlp_norm(x_out) * self.ln_scale_factor, up_w, down_w)
+        attn_contrib = self.attn_scale.to(dtype=x_in.dtype)[None, None, :] * attn_out
+        if self.parallel:
+            # Parallel residuals: MLP branches from x_in, not post-attention
+            mlp_contrib = self.mlp_scale.to(dtype=x_in.dtype)[None, None, :] * self.mlp(self.mlp_norm(x_in) * self.ln_scale_factor, up_w, down_w)
+            x_out = x_in + attn_contrib + mlp_contrib
+        else:
+            x_out = x_in + attn_contrib
+            x_out = x_out + self.mlp_scale.to(dtype=x_out.dtype)[None, None, :] * self.mlp(self.mlp_norm(x_out) * self.ln_scale_factor, up_w, down_w)
         if self.dtg_gate is not None:
             gate = torch.sigmoid(self.dtg_gate(x_in.detach()))
             x_out = x_in + gate * (x_out - x_in)
@@ -909,6 +918,7 @@ class GPT(nn.Module):
         mtp_delay_weight: float = 0.3,
         diffusion_loss_weight: float = 0.3,
         diffusion_aux_prob: float = 0.25,
+        parallel_start_layer: int = 999,
     ):
         super().__init__()
         self._ve_target_dim = num_kv_heads * (model_dim // num_heads)  # kv_dim for value projection
@@ -959,6 +969,7 @@ class GPT(nn.Module):
                     dtg=dtg,
                     gated_attention=gated_attention,
                     value_residual=value_residual,
+                    parallel=(i >= parallel_start_layer),
                 )
                 for i in range(num_layers)
             ]
@@ -1512,8 +1523,9 @@ class _HessianMLP(nn.Module):
         return self.proj(F.leaky_relu(self.fc(x), negative_slope=0.5).square())
 
 class _HessianBlock(nn.Module):
-    def __init__(self, dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init, layer_idx=0, ln_scale=False):
+    def __init__(self, dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init, layer_idx=0, ln_scale=False, parallel=False):
         super().__init__()
+        self.parallel = parallel
         self.attn_norm = RMSNorm()
         self.mlp_norm = RMSNorm()
         self.attn = _HessianAttn(dim, num_heads, num_kv_heads, rope_base, qk_gain_init)
@@ -1526,8 +1538,13 @@ class _HessianBlock(nn.Module):
         mix = self.resid_mix.to(dtype=x.dtype)
         x_in = mix[0][None, None, :] * x + mix[1][None, None, :] * x0
         attn_out = self.attn(self.attn_norm(x_in) * self.ln_scale_factor, v_embed=v_embed)
-        x_out = x_in + self.attn_scale.to(dtype=x_in.dtype)[None, None, :] * attn_out
-        x_out = x_out + self.mlp_scale.to(dtype=x_out.dtype)[None, None, :] * self.mlp(self.mlp_norm(x_out) * self.ln_scale_factor)
+        attn_contrib = self.attn_scale.to(dtype=x_in.dtype)[None, None, :] * attn_out
+        if self.parallel:
+            mlp_contrib = self.mlp_scale.to(dtype=x_in.dtype)[None, None, :] * self.mlp(self.mlp_norm(x_in) * self.ln_scale_factor)
+            x_out = x_in + attn_contrib + mlp_contrib
+        else:
+            x_out = x_in + attn_contrib
+            x_out = x_out + self.mlp_scale.to(dtype=x_out.dtype)[None, None, :] * self.mlp(self.mlp_norm(x_out) * self.ln_scale_factor)
         return x_out
 
 class _HessianGPT(nn.Module):
@@ -1536,7 +1553,8 @@ class _HessianGPT(nn.Module):
                  mlp_mult, tie_embeddings, logit_softcap, rope_base, qk_gain_init,
                  bigram_vocab_size=0, bigram_dim=128, xsa_last_n=0,
                  rope_dims=0, ln_scale=False,
-                 ve_enabled=False, ve_dim=128, ve_layers="9,10"):
+                 ve_enabled=False, ve_dim=128, ve_layers="9,10",
+                 parallel_start_layer=999):
         super().__init__()
         self.tie_embeddings = tie_embeddings
         self.logit_softcap = logit_softcap
@@ -1550,7 +1568,7 @@ class _HessianGPT(nn.Module):
         self.skip_weights = nn.Parameter(torch.ones(self.num_skip_weights, model_dim, dtype=torch.float32))
         self.blocks = nn.ModuleList([
             _HessianBlock(model_dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init,
-                          layer_idx=i, ln_scale=ln_scale)
+                          layer_idx=i, ln_scale=ln_scale, parallel=(i >= parallel_start_layer))
             for i in range(num_layers)
         ])
         if rope_dims > 0:
@@ -1801,6 +1819,7 @@ def main() -> None:
         mtp_delay_weight=args.mtp_delay_weight,
         diffusion_loss_weight=args.diffusion_loss_weight,
         diffusion_aux_prob=args.diffusion_aux_prob,
+        parallel_start_layer=args.parallel_start_layer,
     ).to(device).bfloat16()
     # Banks stay FP32 (like CastedLinear weights), cast to BF16 in forward
     base_model.qo_bank.data = base_model.qo_bank.data.float()
@@ -2189,6 +2208,7 @@ def main() -> None:
         bigram_vocab_size=args.bigram_vocab_size, bigram_dim=args.bigram_dim,
         xsa_last_n=args.xsa_last_n, rope_dims=args.rope_dims, ln_scale=args.ln_scale,
         ve_enabled=args.ve_enabled, ve_dim=args.ve_dim, ve_layers=args.ve_layers,
+        parallel_start_layer=args.parallel_start_layer,
     ).to(device).bfloat16()
     for m in hessian_model.modules():
         if isinstance(m, CastedLinear):
@@ -2301,6 +2321,7 @@ def main() -> None:
         mtp_delay_weight=args.mtp_delay_weight,
         diffusion_loss_weight=args.diffusion_loss_weight,
         diffusion_aux_prob=args.diffusion_aux_prob,
+        parallel_start_layer=args.parallel_start_layer,
     ).to(device).bfloat16()
     eval_model.qo_bank.data = eval_model.qo_bank.data.float()
     eval_model.kv_bank.data = eval_model.kv_bank.data.float()
