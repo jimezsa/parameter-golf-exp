@@ -115,6 +115,10 @@ class Hyperparameters:
     gptq_block_size = int(os.environ.get("GPTQ_BLOCK_SIZE", 128))
     ema_start_step = int(os.environ.get("EMA_START_STEP", "0"))
     parallel_start_layer = int(os.environ.get("PARALLEL_START_LAYER", 7))  # layers >= this use parallel residuals
+    recurrence_depth = int(os.environ.get("RECURRENCE_DEPTH", 1))  # 1 = no recurrence, 2 = one extra pass through zone
+    recurrence_start = int(os.environ.get("RECURRENCE_START", 3))  # first layer in recurrence zone
+    recurrence_end = int(os.environ.get("RECURRENCE_END", 5))  # last layer in recurrence zone (inclusive)
+    recurrence_start_frac = float(os.environ.get("RECURRENCE_START_FRAC", 0.35))  # wallclock fraction before activating
 
 # --- Batched Newton-Schulz orthogonalization ---
 
@@ -919,6 +923,9 @@ class GPT(nn.Module):
         diffusion_loss_weight: float = 0.3,
         diffusion_aux_prob: float = 0.25,
         parallel_start_layer: int = 999,
+        recurrence_depth: int = 1,
+        recurrence_start: int = 3,
+        recurrence_end: int = 5,
     ):
         super().__init__()
         self._ve_target_dim = num_kv_heads * (model_dim // num_heads)  # kv_dim for value projection
@@ -937,6 +944,17 @@ class GPT(nn.Module):
         self.mtp_delay_weight = mtp_delay_weight
         self.diffusion_loss_weight = diffusion_loss_weight
         self.diffusion_aux_prob = diffusion_aux_prob
+        self.recurrence_depth = recurrence_depth
+        self.recurrence_start = recurrence_start
+        self.recurrence_end = recurrence_end
+        self.recurrence_active = False  # toggled from training loop after warmup fraction
+        if recurrence_depth > 1:
+            n_enc = num_layers // 2
+            if recurrence_end < n_enc:
+                raise ValueError(f"recurrence_end ({recurrence_end}) must be >= num_encoder_layers ({n_enc}) "
+                                 f"because recurrence triggers in the decoder loop")
+            if recurrence_start >= num_layers or recurrence_end >= num_layers:
+                raise ValueError(f"recurrence range [{recurrence_start},{recurrence_end}] out of bounds for {num_layers} layers")
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
         self.mask_embed = nn.Parameter(torch.randn(model_dim) * tied_embed_init_std)
         self.time_proj = CastedLinear(1, model_dim, bias=False)
@@ -1043,6 +1061,25 @@ class GPT(nn.Module):
         ve_idx = self.ve_layer_indices.index(layer_idx)
         return ve_base * self.ve_layer_scales[ve_idx].to(dtype=ve_base.dtype)
 
+    def _run_block(
+        self,
+        layer_idx: int,
+        x: Tensor,
+        x0: Tensor,
+        input_ids: Tensor,
+        ve_cache: dict,
+        v0: Tensor | None,
+        is_causal: bool,
+        t_emb: Tensor | None,
+    ) -> tuple[Tensor, Tensor | None]:
+        n = self.num_layers
+        ve = self._get_ve(layer_idx, input_ids, ve_cache)
+        x, raw_v = self.blocks[layer_idx](x, x0,
+            self.qo_bank[layer_idx], self.kv_bank[layer_idx], self.kv_bank[n + layer_idx],
+            self.qo_bank[n + layer_idx], self.mlp_up_bank[layer_idx], self.mlp_down_bank[layer_idx],
+            v_embed=ve, v0=v0, is_causal=is_causal, t_emb=t_emb)
+        return x, raw_v
+
     def _forward_hidden(
         self,
         input_ids: Tensor,
@@ -1060,24 +1097,30 @@ class GPT(nn.Module):
         v0 = None
         skips: list[Tensor] = []
         ve_cache: dict = {}
-        for i in range(self.num_encoder_layers):
-            ve = self._get_ve(i, input_ids, ve_cache)
-            x, raw_v = self.blocks[i](x, x0,
-                self.qo_bank[i], self.kv_bank[i], self.kv_bank[n + i],
-                self.qo_bank[n + i], self.mlp_up_bank[i], self.mlp_down_bank[i],
-                v_embed=ve, v0=v0, is_causal=is_causal, t_emb=t_emb)
+        n_enc = self.num_encoder_layers
+        rec_start = self.recurrence_start
+        rec_end = self.recurrence_end
+        do_recur = self.recurrence_active and self.recurrence_depth > 1
+
+        # --- Encoder layers ---
+        for i in range(n_enc):
+            x, raw_v = self._run_block(i, x, x0, input_ids, ve_cache, v0, is_causal, t_emb)
             if v0 is None and raw_v is not None:
                 v0 = raw_v
             skips.append(x)
+
+        # --- Decoder layers ---
         for i in range(self.num_decoder_layers):
-            bi = self.num_encoder_layers + i
+            bi = n_enc + i
             if skips:
                 x = x + self.skip_weights[i].to(dtype=x.dtype)[None, None, :] * skips.pop()
-            ve = self._get_ve(bi, input_ids, ve_cache)
-            x, _ = self.blocks[bi](x, x0,
-                self.qo_bank[bi], self.kv_bank[bi], self.kv_bank[n + bi],
-                self.qo_bank[n + bi], self.mlp_up_bank[bi], self.mlp_down_bank[bi],
-                v_embed=ve, v0=v0, is_causal=is_causal, t_emb=t_emb)
+            x, _ = self._run_block(bi, x, x0, input_ids, ve_cache, v0, is_causal, t_emb)
+            # After finishing the recurrence zone's first pass, re-run those layers
+            if do_recur and bi == rec_end:
+                for _extra in range(self.recurrence_depth - 1):
+                    for ri in range(rec_start, rec_end + 1):
+                        x, _ = self._run_block(ri, x, x0, input_ids, ve_cache, v0, is_causal, t_emb)
+
         return self.final_norm(x)
 
     def _project_logits(self, hidden: Tensor) -> Tensor:
@@ -1554,11 +1597,15 @@ class _HessianGPT(nn.Module):
                  bigram_vocab_size=0, bigram_dim=128, xsa_last_n=0,
                  rope_dims=0, ln_scale=False,
                  ve_enabled=False, ve_dim=128, ve_layers="9,10",
-                 parallel_start_layer=999):
+                 parallel_start_layer=999,
+                 recurrence_depth=1, recurrence_start=3, recurrence_end=5):
         super().__init__()
         self.tie_embeddings = tie_embeddings
         self.logit_softcap = logit_softcap
         self.num_layers = num_layers
+        self.recurrence_depth = recurrence_depth
+        self.recurrence_start = recurrence_start
+        self.recurrence_end = recurrence_end
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
         self.bigram = BigramHashEmbedding(bigram_vocab_size, bigram_dim, model_dim, trigram=bool(int(os.environ.get("TRIGRAM", "0")))) if bigram_vocab_size > 0 else None
         self.smear = SmearGate(model_dim)
@@ -1615,6 +1662,11 @@ class _HessianGPT(nn.Module):
                 x = x + self.skip_weights[i].to(dtype=x.dtype)[None, None, :] * skips.pop()
             ve = self._get_ve(bi, input_ids, ve_cache)
             x = self.blocks[bi](x, x0, v_embed=ve)
+            if self.recurrence_depth > 1 and bi == self.recurrence_end:
+                for _extra in range(self.recurrence_depth - 1):
+                    for ri in range(self.recurrence_start, self.recurrence_end + 1):
+                        ve_r = self._get_ve(ri, input_ids, ve_cache)
+                        x = self.blocks[ri](x, x0, v_embed=ve_r)
         x = self.final_norm(x)
         x_flat = x.reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
@@ -1820,6 +1872,9 @@ def main() -> None:
         diffusion_loss_weight=args.diffusion_loss_weight,
         diffusion_aux_prob=args.diffusion_aux_prob,
         parallel_start_layer=args.parallel_start_layer,
+        recurrence_depth=args.recurrence_depth,
+        recurrence_start=args.recurrence_start,
+        recurrence_end=args.recurrence_end,
     ).to(device).bfloat16()
     # Banks stay FP32 (like CastedLinear weights), cast to BF16 in forward
     base_model.qo_bank.data = base_model.qo_bank.data.float()
@@ -1945,6 +2000,8 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
+    if args.recurrence_depth > 1:
+        log0(f"recurrence:depth={args.recurrence_depth} layers=[{args.recurrence_start},{args.recurrence_end}] start_frac={args.recurrence_start_frac}")
     train_loader = DistributedTokenLoader(args.train_files, rank, world_size, device)
     def zero_grad_all() -> None:
         for opt in optimizers:
@@ -2037,6 +2094,15 @@ def main() -> None:
                 )
             break
         elapsed_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
+        # Activate depth recurrence after warmup fraction
+        if (
+            args.recurrence_depth > 1
+            and not base_model.recurrence_active
+            and max_wallclock_ms is not None
+            and elapsed_ms >= args.recurrence_start_frac * max_wallclock_ms
+        ):
+            base_model.recurrence_active = True
+            log0(f"recurrence:activated step:{step} elapsed_ms:{elapsed_ms:.0f} depth:{args.recurrence_depth} layers:[{args.recurrence_start},{args.recurrence_end}]")
         scale = lr_mul(step, elapsed_ms)
         if args.late_qat_threshold > 0 and scale < args.late_qat_threshold and not CastedLinear._qat_enabled:
             CastedLinear._qat_enabled = True
@@ -2209,6 +2275,9 @@ def main() -> None:
         xsa_last_n=args.xsa_last_n, rope_dims=args.rope_dims, ln_scale=args.ln_scale,
         ve_enabled=args.ve_enabled, ve_dim=args.ve_dim, ve_layers=args.ve_layers,
         parallel_start_layer=args.parallel_start_layer,
+        recurrence_depth=args.recurrence_depth,
+        recurrence_start=args.recurrence_start,
+        recurrence_end=args.recurrence_end,
     ).to(device).bfloat16()
     for m in hessian_model.modules():
         if isinstance(m, CastedLinear):
@@ -2322,7 +2391,11 @@ def main() -> None:
         diffusion_loss_weight=args.diffusion_loss_weight,
         diffusion_aux_prob=args.diffusion_aux_prob,
         parallel_start_layer=args.parallel_start_layer,
+        recurrence_depth=args.recurrence_depth,
+        recurrence_start=args.recurrence_start,
+        recurrence_end=args.recurrence_end,
     ).to(device).bfloat16()
+    eval_model.recurrence_active = args.recurrence_depth > 1  # always active during eval
     eval_model.qo_bank.data = eval_model.qo_bank.data.float()
     eval_model.kv_bank.data = eval_model.kv_bank.data.float()
     eval_model.mlp_up_bank.data = eval_model.mlp_up_bank.data.float()
