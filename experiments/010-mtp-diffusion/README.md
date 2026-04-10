@@ -24,7 +24,11 @@ No code changes from exp 009 — this is a config-only fusion experiment.
 - Steps / Duration: ~900 steps in 10 min wallclock (1x H100)
 - Key hyperparameters: see above
 
-### Run Command (1xH100)
+- Data prep (run once per pod):
+```bash
+python3 data/cached_challenge_fineweb.py --variant sp1024
+```
+- Run from repo root (1x H100 dev):
 ```bash
 RUN_ID=exp010_mtp_diff SEED=1337 \
 MTP_DELAY_ENABLED=0 \
@@ -32,7 +36,17 @@ EMA_START_STEP=800 \
 DIFFUSION_LOSS_WEIGHT=0.10 \
 DIFFUSION_AUX_PROB=0.08 \
 DIFFUSION_STOP_FRAC=0.70 \
-python3 experiments/010-mtp-diffusion/train_gpt.py
+torchrun --standalone --nproc_per_node=1 experiments/010-mtp-diffusion/train_gpt.py
+```
+- Run for final submission (8x H100):
+```bash
+RUN_ID=exp010_mtp_diff SEED=1337 \
+MTP_DELAY_ENABLED=0 \
+EMA_START_STEP=800 \
+DIFFUSION_LOSS_WEIGHT=0.10 \
+DIFFUSION_AUX_PROB=0.08 \
+DIFFUSION_STOP_FRAC=0.70 \
+torchrun --standalone --nproc_per_node=8 experiments/010-mtp-diffusion/train_gpt.py
 ```
 
 ## Iteration Results
