@@ -60,6 +60,10 @@ torchrun --standalone --nproc_per_node=8 experiments/009-text-diffusion/train_gp
 | v6      | 1.4008  | 1.8406 (int6+lzma) | 688      | 7.65MB ✅ | 0980da8 | DIFF_PROB=0.10, weight=0.15, stop_frac=0.50. Regression — SWA@150 + missing EMA_START_STEP poisoned quant |
 | v7      | **1.2763** | **1.2753** (int6+lzma) | 692  | **12.45MB** ✅ | 0980da8 | Scout's schedule: DIFF_PROB=0.08, weight=0.10, stop_frac=0.70, EMA_START_STEP=800. New exp 009 best, near-zero quant degradation |
 | v8      | 1.2759  | 1.2751 (int6+lzma) | 692  | 12.0MB ✅ | 7a06d1f | WARMDOWN_ITERS=224 (was 3500 default). Negligible gain over v7 — warmdown schedule irrelevant for this architecture |
+| v9      | 1.3565  | 1.5862 (int6+lzma) | ~690 | — | — | Higher LR experiment — SWA fired at step 150, poisoned quant weights |
+| v10     | 1.3041  | 4.1051 (int6+lzma) | 925  | 5.28MB | — | 11L/576d width scaling — catastrophic: EMA never activated (only 649 steps at 925ms/step) |
+| v11     | 1.3936  | 1.8012 (int6+lzma) | 693  | 7.73MB ✅ | — | QK_GAIN=5.25 experiment — higher gain degraded BPB, no benefit |
+| v12     | **1.2742** | **1.2746** (int6+lzma) | **684** | **12.60MB** ✅ | 57a3f4d | Parallel residuals (PARALLEL_START_LAYER=7). Faster steps → more training → new exp 009 best sw BPB |
 
 - **Val BPB**: raw validation bits-per-byte before quantization (AR pass)
 - **Post-Quant BPB**: after int8+zlib (or int6+lzma if applicable)
@@ -126,10 +130,11 @@ torchrun --standalone --nproc_per_node=8 experiments/009-text-diffusion/train_gp
 | Rank | Experiment | Post-Quant sw BPB | Artifact |
 |------|-----------|-------------------|----------|
 | 1 | Exp 008 v6 | **1.2716** | 12.20MB ✅ |
-| 2 | **Exp 009 v7** | **1.2753** | 12.45MB ✅ |
-| 3 | Exp 009 v5 | 1.2887 | 12.37MB ✅ |
-| 4 | Exp 002 v14 | 1.3586 (int8+lzma) | 15.82MB ✅ |
-| 5 | Baseline | 1.3676 | — |
+| 2 | **Exp 009 v12** | **1.2746** | 12.60MB ✅ |
+| 3 | Exp 009 v7 | 1.2753 | 12.45MB ✅ |
+| 4 | Exp 009 v5 | 1.2887 | 12.37MB ✅ |
+| 5 | Exp 002 v14 | 1.3586 (int8+lzma) | 15.82MB ✅ |
+| 6 | Baseline | 1.3676 | — |
 
 ## 8x H100 Submission Run
 
