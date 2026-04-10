@@ -59,6 +59,7 @@ torchrun --standalone --nproc_per_node=8 experiments/009-text-diffusion/train_gp
 | v5      | 1.2775  | **1.2887** (int6+lzma) | 688      | **12.37MB** ✅ | 8fb0c2e | Minimal diffusion: DIFFUSION_AUX_PROB=0.05, weight=0.1, 11L. 873 steps, best post-quant |
 | v6      | 1.4008  | 1.8406 (int6+lzma) | 688      | 7.65MB ✅ | 0980da8 | DIFF_PROB=0.10, weight=0.15, stop_frac=0.50. Regression — SWA@150 + missing EMA_START_STEP poisoned quant |
 | v7      | **1.2763** | **1.2753** (int6+lzma) | 692  | **12.45MB** ✅ | 0980da8 | Scout's schedule: DIFF_PROB=0.08, weight=0.10, stop_frac=0.70, EMA_START_STEP=800. New exp 009 best, near-zero quant degradation |
+| v8      | 1.2759  | 1.2751 (int6+lzma) | 692  | 12.0MB ✅ | 7a06d1f | WARMDOWN_ITERS=224 (was 3500 default). Negligible gain over v7 — warmdown schedule irrelevant for this architecture |
 
 - **Val BPB**: raw validation bits-per-byte before quantization (AR pass)
 - **Post-Quant BPB**: after int8+zlib (or int6+lzma if applicable)
