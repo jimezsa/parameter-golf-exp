@@ -119,6 +119,7 @@ class Hyperparameters:
     recurrence_start = int(os.environ.get("RECURRENCE_START", 3))  # first layer in recurrence zone
     recurrence_end = int(os.environ.get("RECURRENCE_END", 5))  # last layer in recurrence zone (inclusive)
     recurrence_start_frac = float(os.environ.get("RECURRENCE_START_FRAC", 0.35))  # wallclock fraction before activating
+    skip_quant = bool(int(os.environ.get("SKIP_QUANT", "0")))  # skip post-training quantization pipeline
 
 # --- Batched Newton-Schulz orthogonalization ---
 
@@ -2253,6 +2254,11 @@ def main() -> None:
         code_bytes = len(code.encode("utf-8"))
         log0(f"Serialized model: {model_bytes} bytes")
         log0(f"Code size: {code_bytes} bytes")
+    if args.skip_quant:
+        log0("skip_quant:enabled — skipping post-training quantization pipeline")
+        if distributed:
+            dist.destroy_process_group()
+        return
     # Unbank 3D tensors into individual 2D tensors for quantization
     sd_cpu = {k: v.detach().cpu() for k, v in export_sd.items()}
     unbanked_sd = _unbank_state_dict(sd_cpu, args.num_layers)
