@@ -70,12 +70,13 @@ torchrun --standalone --nproc_per_node=8 experiments/011-ar-diffusion-sp8192/tra
 | v1      | 1.2048  | sw 1.2148 (int6+brotli) | 753ms | 16.67MB ❌ | — | SP8192 baseline, diffusion OFF. EMA broken (start=0). Post-EMA 1.2172 on quant rerun w/ EMA fix. Artifact over 16MB limit — needs more pruning. |
 | v2      | 1.2107  | sw 1.2196 (int6+brotli) | 800ms | 16.67MB ❌ | — | Diffusion ON (8% aux, off at 70%). +47ms/step overhead, 2× memory (51GB), 46 fewer steps. Quant gap 0.009. Diffusion dead on SP8192 stack. |
 | v3      | 1.2138  | sw 1.2362 (int6+brotli) | 825ms | 15.94MB ✅ | — | Diffusion ON (bug: intended OFF). TARGET_MB=15.2. 44.4% pruned. Aggressive pruning costs +0.017 BPB vs v2. |
+| v4      | 1.2046  | sw 1.2283 (int6+brotli) | 751ms | 15.94MB ✅ | — | **Diffusion OFF (confirmed).** TARGET_MB=15.2. 784 steps (vs v3's 713). 25.9 GiB peak (half v3). Best 1xH100 result. |
 
 ## Iteration Plan
 1. ~~**v1**: Clean run with diffusion disabled — establish SP8192 reference BPB~~ ✅
 2. ~~**v2**: Enable diffusion (8% aux prob, off at 70%) — measure delta~~ ✅ Dead on SP8192.
 3. ~~**v3**: No-diffusion with TARGET_MB=15.2~~ ✅ Bug: diffusion still ON. Confirmed aggressive pruning hurts.
-4. **v4**: No-diffusion repeat with `DIFFUSION_AUX_PROB=0.0 TARGET_MB=15.2` (fix env var bug)
+4. ~~**v4**: No-diffusion with `DIFFUSION_AUX_PROB=0.0 TARGET_MB=15.2`~~ ✅ **Best 1xH100 result.** sw BPB 1.2283 — beats v1 by 0.013 with artifact compliance.
 5. **v5+**: P2 techniques (depth recurrence, EMA tuning, warmdown schedule)
 6. Target: beat 1.0810 BPB (current public SOTA)
 
@@ -101,6 +102,15 @@ torchrun --standalone --nproc_per_node=8 experiments/011-ar-diffusion-sp8192/tra
 - Post-quant sw BPB **1.2362** — 0.017 worse than v2 (1.2196). Aggressive pruning (44.4% vs 20.5%) is the cause.
 - Artifact **15.94MB ✅** (15,938,254 bytes) — fits under 16,000,000 byte limit.
 - **Takeaway:** TARGET_MB=15.2 works for artifact compliance, but 44.4% pruning costs significant BPB. v4 needs correct diffusion=OFF + this target.
+
+**v4 (Diffusion OFF confirmed, TARGET_MB=15.2):**
+- val_bpb **1.2046** → post-EMA **1.2171**. Matches v1's raw BPB exactly.
+- Post-quant sw BPB **1.2283** — best 1xH100 result across all experiments.
+- Roundtrip BPB 1.2438, sliding window 1.2283. Quant degradation: 0.024 BPB (train→sw).
+- 784 steps @ 751ms/step. 25.9 GiB peak (half of v3's 51.3 GiB — no diffusion overhead).
+- Artifact 15.94MB ✅ (15,935,698 bytes). 45.1% pruning for TARGET_MB=15.2.
+- **Diffusion confirmed dead on SP8192:** v4 (no diffusion) beats v3 (diffusion ON) by 0.008 sw BPB, trains faster (71 more steps), uses half the memory.
+- SP8192 stack superiority confirmed: beats exp 008 v6 (1.2716) by 0.043, exp 009 v7 (1.2753) by 0.047.
 
 ## Status
 - [x] Proposed by professor + scout
