@@ -68,7 +68,7 @@ torchrun --standalone --nproc_per_node=8 experiments/011-ar-diffusion-sp8192/tra
 | Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Description |
 |---------|---------|----------------|----------------|---------------|--------|-------------|
 | v1      | 1.2048  | sw 1.2148 (int6+brotli) | 753ms | 16.67MB ❌ | — | SP8192 baseline, diffusion OFF. EMA broken (start=0). Post-EMA 1.2172 on quant rerun w/ EMA fix. Artifact over 16MB limit — needs more pruning. |
-| v2      |         |                |                |               |        | Add diffusion schedule back (8% aux, off at 70%) |
+| v2      | 1.2107  | sw 1.2196 (int6+brotli) | 800ms | 16.67MB ❌ | — | Diffusion ON (8% aux, off at 70%). +47ms/step overhead, 2× memory (51GB), 46 fewer steps. Quant gap 0.009. Diffusion dead on SP8192 stack. |
 
 ## Iteration Plan
 1. **v1**: Clean run with diffusion disabled — establish SP8192 reference BPB
@@ -85,6 +85,13 @@ torchrun --standalone --nproc_per_node=8 experiments/011-ar-diffusion-sp8192/tra
 - **Artifact 16.67MB** — 670KB over the 16MB limit. Selective pruning targeted 15.9MB but total submission (model + code) exceeded 16MB. v2 needs more aggressive pruning or smaller model.
 - EMA broken in SKIP_QUANT run (started from step 0, dominated by garbage). Fixed in quant rerun (EMA_START_STEP=620, post_ema=1.2172).
 - 782 steps @ 753ms/step avg. 35.94M params, GQA 8/4.
+
+**v2 (Diffusion ON, 8% aux, off at 70%):**
+- val_bpb **1.2107** — 0.006 worse than v1 (1.2048). Diffusion overhead costs 46 steps (782→736).
+- Post-quant sw BPB **1.2196** — 0.005 worse than v1 (1.2148). Quant regularization negligible on this stack.
+- Memory 2× (51GB vs 26GB). Step time 800ms vs 753ms.
+- **Verdict: Diffusion is dead on SP8192.** Brotli+SDClip already handles quantization well; diffusion adds cost with no benefit.
+- v1 remains baseline going forward. **Key issue: artifact 16.67MB exceeds 16,000,000 byte limit by 672KB.**
 
 ## Status
 - [x] Proposed by professor + scout
