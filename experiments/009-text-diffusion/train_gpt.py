@@ -120,6 +120,7 @@ class Hyperparameters:
     recurrence_end = int(os.environ.get("RECURRENCE_END", 5))  # last layer in recurrence zone (inclusive)
     recurrence_start_frac = float(os.environ.get("RECURRENCE_START_FRAC", 0.35))  # wallclock fraction before activating
     skip_quant = bool(int(os.environ.get("SKIP_QUANT", "0")))  # skip post-training quantization pipeline
+    weight_share = bool(int(os.environ.get("WEIGHT_SHARE", "0")))  # block-wise weight sharing: run each layer twice for 2x effective depth
 
 # --- Batched Newton-Schulz orthogonalization ---
 
@@ -927,8 +928,10 @@ class GPT(nn.Module):
         recurrence_depth: int = 1,
         recurrence_start: int = 3,
         recurrence_end: int = 5,
+        weight_share: bool = False,
     ):
         super().__init__()
+        self.weight_share = weight_share
         self._ve_target_dim = num_kv_heads * (model_dim // num_heads)  # kv_dim for value projection
         if logit_softcap <= 0.0:
             raise ValueError(f"logit_softcap must be positive, got {logit_softcap}")
@@ -1108,6 +1111,8 @@ class GPT(nn.Module):
             x, raw_v = self._run_block(i, x, x0, input_ids, ve_cache, v0, is_causal, t_emb)
             if v0 is None and raw_v is not None:
                 v0 = raw_v
+            if self.weight_share:
+                x, _ = self._run_block(i, x, x0, input_ids, ve_cache, v0, is_causal, t_emb)
             skips.append(x)
 
         # --- Decoder layers ---
@@ -1116,6 +1121,8 @@ class GPT(nn.Module):
             if skips:
                 x = x + self.skip_weights[i].to(dtype=x.dtype)[None, None, :] * skips.pop()
             x, _ = self._run_block(bi, x, x0, input_ids, ve_cache, v0, is_causal, t_emb)
+            if self.weight_share:
+                x, _ = self._run_block(bi, x, x0, input_ids, ve_cache, v0, is_causal, t_emb)
             # After finishing the recurrence zone's first pass, re-run those layers
             if do_recur and bi == rec_end:
                 for _extra in range(self.recurrence_depth - 1):
@@ -1599,11 +1606,13 @@ class _HessianGPT(nn.Module):
                  rope_dims=0, ln_scale=False,
                  ve_enabled=False, ve_dim=128, ve_layers="9,10",
                  parallel_start_layer=999,
-                 recurrence_depth=1, recurrence_start=3, recurrence_end=5):
+                 recurrence_depth=1, recurrence_start=3, recurrence_end=5,
+                 weight_share=False):
         super().__init__()
         self.tie_embeddings = tie_embeddings
         self.logit_softcap = logit_softcap
         self.num_layers = num_layers
+        self.weight_share = weight_share
         self.recurrence_depth = recurrence_depth
         self.recurrence_start = recurrence_start
         self.recurrence_end = recurrence_end
@@ -1656,6 +1665,8 @@ class _HessianGPT(nn.Module):
         for i in range(self.num_encoder_layers):
             ve = self._get_ve(i, input_ids, ve_cache)
             x = self.blocks[i](x, x0, v_embed=ve)
+            if self.weight_share:
+                x = self.blocks[i](x, x0, v_embed=ve)
             skips.append(x)
         for i in range(self.num_decoder_layers):
             bi = self.num_encoder_layers + i
@@ -1663,6 +1674,8 @@ class _HessianGPT(nn.Module):
                 x = x + self.skip_weights[i].to(dtype=x.dtype)[None, None, :] * skips.pop()
             ve = self._get_ve(bi, input_ids, ve_cache)
             x = self.blocks[bi](x, x0, v_embed=ve)
+            if self.weight_share:
+                x = self.blocks[bi](x, x0, v_embed=ve)
             if self.recurrence_depth > 1 and bi == self.recurrence_end:
                 for _extra in range(self.recurrence_depth - 1):
                     for ri in range(self.recurrence_start, self.recurrence_end + 1):
@@ -1876,6 +1889,7 @@ def main() -> None:
         recurrence_depth=args.recurrence_depth,
         recurrence_start=args.recurrence_start,
         recurrence_end=args.recurrence_end,
+        weight_share=args.weight_share,
     ).to(device).bfloat16()
     # Banks stay FP32 (like CastedLinear weights), cast to BF16 in forward
     base_model.qo_bank.data = base_model.qo_bank.data.float()
@@ -2001,6 +2015,8 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
+    if args.weight_share:
+        log0(f"weight_share:enabled (2x effective depth = {args.num_layers * 2} layers from {args.num_layers} physical)")
     if args.recurrence_depth > 1:
         log0(f"recurrence:depth={args.recurrence_depth} layers=[{args.recurrence_start},{args.recurrence_end}] start_frac={args.recurrence_start_frac}")
     train_loader = DistributedTokenLoader(args.train_files, rank, world_size, device)
@@ -2276,6 +2292,7 @@ def main() -> None:
         recurrence_depth=args.recurrence_depth,
         recurrence_start=args.recurrence_start,
         recurrence_end=args.recurrence_end,
+        weight_share=args.weight_share,
     ).to(device).bfloat16()
     for m in hessian_model.modules():
         if isinstance(m, CastedLinear):
@@ -2392,6 +2409,7 @@ def main() -> None:
         recurrence_depth=args.recurrence_depth,
         recurrence_start=args.recurrence_start,
         recurrence_end=args.recurrence_end,
+        weight_share=args.weight_share,
     ).to(device).bfloat16()
     eval_model.recurrence_active = args.recurrence_depth > 1  # always active during eval
     eval_model.qo_bank.data = eval_model.qo_bank.data.float()
