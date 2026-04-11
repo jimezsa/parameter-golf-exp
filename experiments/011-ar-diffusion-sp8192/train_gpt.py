@@ -25,15 +25,6 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from flash_attn_interface import flash_attn_func as flash_attn_3_func
-from ternary import (
-    TernaryLinear,
-    TernaryQuantizeSTE,
-    pack_ternary_values,
-    pack_ternary_weight,
-    quantize_ternary_weight,
-    unpack_ternary_values,
-    unpack_ternary_weight,
-)
 
 class Hyperparameters:
     data_path = os.environ.get("DATA_PATH", "./data/datasets/fineweb10B_sp8192")
