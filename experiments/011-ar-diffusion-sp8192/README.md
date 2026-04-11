@@ -67,7 +67,7 @@ torchrun --standalone --nproc_per_node=8 experiments/011-ar-diffusion-sp8192/tra
 
 | Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Description |
 |---------|---------|----------------|----------------|---------------|--------|-------------|
-| v1      |         |                |                |               |        | Clean SP8192 rebase, diffusion OFF (pure baseline) |
+| v1      | 1.2048  | sw 1.2148 (int6+brotli) | 753ms | 16.67MB ❌ | — | SP8192 baseline, diffusion OFF. EMA broken (start=0). Post-EMA 1.2172 on quant rerun w/ EMA fix. Artifact over 16MB limit — needs more pruning. |
 | v2      |         |                |                |               |        | Add diffusion schedule back (8% aux, off at 70%) |
 
 ## Iteration Plan
@@ -78,12 +78,18 @@ torchrun --standalone --nproc_per_node=8 experiments/011-ar-diffusion-sp8192/tra
 5. Target: beat 1.0810 BPB (current public SOTA)
 
 ## Analysis
-Pending first run.
+
+**v1 (SP8192 baseline, diffusion OFF):**
+- val_bpb **1.2048** — strong start. SP8192 tokenizer alone gives ~0.07 BPB improvement over SP1024 (exp 009 v7: 1.2753).
+- Post-quant sw BPB **1.2148** (int6+brotli). Quantization degradation: 0.010 BPB.
+- **Artifact 16.67MB** — 670KB over the 16MB limit. Selective pruning targeted 15.9MB but total submission (model + code) exceeded 16MB. v2 needs more aggressive pruning or smaller model.
+- EMA broken in SKIP_QUANT run (started from step 0, dominated by garbage). Fixed in quant rerun (EMA_START_STEP=620, post_ema=1.2172).
+- 782 steps @ 753ms/step avg. 35.94M params, GQA 8/4.
 
 ## Status
 - [x] Proposed by professor + scout
 - [x] Approved by professor
 - [x] Implemented by engineer (SP8192 rebase)
-- [ ] Tested by human
-- [ ] Analyzed
+- [x] v1 tested (1xH100)
+- [ ] Iterating
 - [ ] Decision: pending
