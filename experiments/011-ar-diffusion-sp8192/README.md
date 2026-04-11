@@ -69,13 +69,15 @@ torchrun --standalone --nproc_per_node=8 experiments/011-ar-diffusion-sp8192/tra
 |---------|---------|----------------|----------------|---------------|--------|-------------|
 | v1      | 1.2048  | sw 1.2148 (int6+brotli) | 753ms | 16.67MB ❌ | — | SP8192 baseline, diffusion OFF. EMA broken (start=0). Post-EMA 1.2172 on quant rerun w/ EMA fix. Artifact over 16MB limit — needs more pruning. |
 | v2      | 1.2107  | sw 1.2196 (int6+brotli) | 800ms | 16.67MB ❌ | — | Diffusion ON (8% aux, off at 70%). +47ms/step overhead, 2× memory (51GB), 46 fewer steps. Quant gap 0.009. Diffusion dead on SP8192 stack. |
+| v3      | 1.2138  | sw 1.2362 (int6+brotli) | 825ms | 15.94MB ✅ | — | Diffusion ON (bug: intended OFF). TARGET_MB=15.2. 44.4% pruned. Aggressive pruning costs +0.017 BPB vs v2. |
 
 ## Iteration Plan
-1. **v1**: Clean run with diffusion disabled — establish SP8192 reference BPB
-2. **v2**: Enable diffusion (8% aux prob, off at 70%) — measure delta
-3. **v3+**: Scout's Annealed Handoff (overlap diffusion warmdown with QAT warmup)
-4. **v4+**: P2 techniques (depth recurrence, EMA tuning, warmdown schedule)
-5. Target: beat 1.0810 BPB (current public SOTA)
+1. ~~**v1**: Clean run with diffusion disabled — establish SP8192 reference BPB~~ ✅
+2. ~~**v2**: Enable diffusion (8% aux prob, off at 70%) — measure delta~~ ✅ Dead on SP8192.
+3. ~~**v3**: No-diffusion with TARGET_MB=15.2~~ ✅ Bug: diffusion still ON. Confirmed aggressive pruning hurts.
+4. **v4**: No-diffusion repeat with `DIFFUSION_AUX_PROB=0.0 TARGET_MB=15.2` (fix env var bug)
+5. **v5+**: P2 techniques (depth recurrence, EMA tuning, warmdown schedule)
+6. Target: beat 1.0810 BPB (current public SOTA)
 
 ## Analysis
 
@@ -92,6 +94,13 @@ torchrun --standalone --nproc_per_node=8 experiments/011-ar-diffusion-sp8192/tra
 - Memory 2× (51GB vs 26GB). Step time 800ms vs 753ms.
 - **Verdict: Diffusion is dead on SP8192.** Brotli+SDClip already handles quantization well; diffusion adds cost with no benefit.
 - v1 remains baseline going forward. **Key issue: artifact 16.67MB exceeds 16,000,000 byte limit by 672KB.**
+
+**v3 (Diffusion ON — bug, TARGET_MB=15.2):**
+- Intended as no-diffusion with tighter artifact, but `DIFF_FRAC` env var was wrong — code reads `DIFFUSION_AUX_PROB`. Diffusion was still active.
+- val_bpb **1.2138**, post_ema **1.2228** — same as v2 (same model, diffusion still on).
+- Post-quant sw BPB **1.2362** — 0.017 worse than v2 (1.2196). Aggressive pruning (44.4% vs 20.5%) is the cause.
+- Artifact **15.94MB ✅** (15,938,254 bytes) — fits under 16,000,000 byte limit.
+- **Takeaway:** TARGET_MB=15.2 works for artifact compliance, but 44.4% pruning costs significant BPB. v4 needs correct diffusion=OFF + this target.
 
 ## Status
 - [x] Proposed by professor + scout
