@@ -105,9 +105,9 @@ class Hyperparameters:
     mtp_delay_weight = float(os.environ.get("MTP_DELAY_WEIGHT", 0.3))
     mtp_delay_kill_after = int(os.environ.get("MTP_DELAY_KILL_AFTER", 5000))
     mtp_delay_kill_factor = float(os.environ.get("MTP_DELAY_KILL_FACTOR", 2.0))
-    diffusion_loss_weight = float(os.environ.get("DIFFUSION_LOSS_WEIGHT", 0.3))
-    diffusion_aux_prob = float(os.environ.get("DIFFUSION_AUX_PROB", 0.25))
-    diffusion_stop_frac = float(os.environ.get("DIFFUSION_STOP_FRAC", 1.0))  # fraction of wallclock after which diffusion is disabled (1.0 = never stop)
+    diffusion_loss_weight = float(os.environ.get("DIFFUSION_LOSS_WEIGHT", 0.10))
+    diffusion_aux_prob = float(os.environ.get("DIFFUSION_AUX_PROB", 0.08))
+    diffusion_stop_frac = float(os.environ.get("DIFFUSION_STOP_FRAC", 0.70))  # fraction of wallclock after which diffusion is disabled (1.0 = never stop)
     # GPTQ calibration
     gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 64))
     gptq_block_size = int(os.environ.get("GPTQ_BLOCK_SIZE", 128))
@@ -117,7 +117,7 @@ class Hyperparameters:
     matrix_clip_sigmas = float(os.environ.get("MATRIX_CLIP_SIGMAS", 12.85))
     embed_clip_sigmas = float(os.environ.get("EMBED_CLIP_SIGMAS", 20.0))
     compressor = os.environ.get("COMPRESSOR", "brotli")
-    ema_start_step = int(os.environ.get("EMA_START_STEP", "0"))
+    ema_start_step = int(os.environ.get("EMA_START_STEP", "620"))
     parallel_start_layer = int(os.environ.get("PARALLEL_START_LAYER", 7))  # layers >= this use parallel residuals
     recurrence_depth = int(os.environ.get("RECURRENCE_DEPTH", 1))  # 1 = no recurrence, 2 = one extra pass through zone
     recurrence_start = int(os.environ.get("RECURRENCE_START", 3))  # first layer in recurrence zone
