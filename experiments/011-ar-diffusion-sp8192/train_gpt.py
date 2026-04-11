@@ -76,13 +76,9 @@ class Hyperparameters:
     muon_beta2 = float(os.environ.get("MUON_BETA2", 0.95))
     swa_enabled = bool(int(os.environ.get("SWA_ENABLED", "1")))
     swa_every = int(os.environ.get("SWA_EVERY", 50))
-    lawa_enabled = bool(int(os.environ.get("LAWA_ENABLED", "0")))
-    lawa_k = int(os.environ.get("LAWA_K", 10))
-    lawa_freq = int(os.environ.get("LAWA_FREQ", 100))
     muon_wd = float(os.environ.get("MUON_WD", 0.09))
     adam_wd = float(os.environ.get("ADAM_WD", 0.02))
     embed_wd = float(os.environ.get("EMBED_WD", 0.09))
-    ema_decay = float(os.environ.get("EMA_DECAY", 0.997))
     qat_enabled = bool(int(os.environ.get("QAT_ENABLED", "0")))
     bigram_vocab_size = int(os.environ.get("BIGRAM_VOCAB_SIZE", 0))
     bigram_dim = int(os.environ.get("BIGRAM_DIM", 128))
@@ -118,7 +114,6 @@ class Hyperparameters:
     matrix_clip_sigmas = float(os.environ.get("MATRIX_CLIP_SIGMAS", 12.85))
     embed_clip_sigmas = float(os.environ.get("EMBED_CLIP_SIGMAS", 20.0))
     compressor = os.environ.get("COMPRESSOR", "brotli")
-    ema_start_step = int(os.environ.get("EMA_START_STEP", "620"))
     parallel_start_layer = int(os.environ.get("PARALLEL_START_LAYER", 7))  # layers >= this use parallel residuals
     recurrence_depth = int(os.environ.get("RECURRENCE_DEPTH", 1))  # 1 = no recurrence, 2 = one extra pass through zone
     recurrence_start = int(os.environ.get("RECURRENCE_START", 3))  # first layer in recurrence zone
@@ -2197,10 +2192,6 @@ def main() -> None:
         train_loader = ShuffledSequenceLoader(args, rank, world_size, device)
     swa_state: dict[str, Tensor] | None = None
     swa_count = 0
-    from collections import deque
-    lawa_queue: deque[dict[str, Tensor]] = deque(maxlen=args.lawa_k)
-    ema_state = {name: t.detach().float().clone() for name, t in base_model.state_dict().items()}
-    ema_decay = args.ema_decay
     training_time_ms = 0.0
     stop_after_step: int | None = None
     last_x: Tensor | None = None
@@ -2294,14 +2285,6 @@ def main() -> None:
         # Phase 3: Wait for RS, local NS5, all-gather (banks processed last)
         optimizer_muon.step()
         zero_grad_all()
-        # EMA update (delayed start if EMA_START_STEP > 0)
-        with torch.no_grad():
-            if step == args.ema_start_step and step > 0:
-                # Re-initialize EMA to current weights at the start step so we average only late-training weights
-                ema_state = {name: t.detach().float().clone() for name, t in base_model.state_dict().items()}
-            if step >= args.ema_start_step:
-                for name, t in base_model.state_dict().items():
-                    ema_state[name].mul_(ema_decay).add_(t.detach().float(), alpha=1.0 - ema_decay)
         step += 1
         approx_training_time_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
         if args.swa_enabled and scale < 0.2 and step % args.swa_every == 0:
@@ -2313,8 +2296,6 @@ def main() -> None:
                 for name, t in base_model.state_dict().items():
                     swa_state[name] += t.detach().cpu()
                 swa_count += 1
-        if args.lawa_enabled and step % args.lawa_freq == 0:
-            lawa_queue.append({name: t.detach().cpu().clone() for name, t in base_model.state_dict().items()})
         should_log_train = (
             args.train_log_every > 0
             and (step <= 10 or step % args.train_log_every == 0 or stop_after_step is not None)
@@ -2354,23 +2335,6 @@ def main() -> None:
         f"peak memory allocated: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB "
         f"reserved: {torch.cuda.max_memory_reserved() // 1024 // 1024} MiB"
     )
-    # Apply weight averaging
-    if args.lawa_enabled and len(lawa_queue) > 1:
-        log0(f"lawa:applying LAWA averaging k={len(lawa_queue)}")
-        current_state = base_model.state_dict()
-        avg_state = {name: torch.zeros(t.shape, dtype=torch.float32, device='cpu') for name, t in current_state.items()}
-        for snap in lawa_queue:
-            for name in avg_state:
-                avg_state[name] += snap[name].float()
-        for name in avg_state:
-            avg_state[name] /= len(lawa_queue)
-            avg_state[name] = avg_state[name].to(dtype=current_state[name].dtype)
-        base_model.load_state_dict(avg_state, strict=True)
-    else:
-        log0("ema:applying EMA weights")
-        current_state = base_model.state_dict()
-        avg_state = {name: t.to(dtype=current_state[name].dtype) for name, t in ema_state.items()}
-        base_model.load_state_dict(avg_state, strict=True)
     torch.cuda.synchronize()
     t_diag = time.perf_counter()
     diag_val_loss, diag_val_bpb = eval_val(
@@ -2379,7 +2343,7 @@ def main() -> None:
     )
     torch.cuda.synchronize()
     log0(
-        f"DIAGNOSTIC post_ema val_loss:{diag_val_loss:.4f} val_bpb:{diag_val_bpb:.4f} "
+        f"DIAGNOSTIC post_train val_loss:{diag_val_loss:.4f} val_bpb:{diag_val_bpb:.4f} "
         f"eval_time:{1000.0 * (time.perf_counter() - t_diag):.0f}ms"
     )
     full_state_dict = base_model.state_dict()
