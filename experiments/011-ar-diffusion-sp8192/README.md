@@ -71,6 +71,7 @@ torchrun --standalone --nproc_per_node=8 experiments/011-ar-diffusion-sp8192/tra
 | v2      | 1.2107  | sw 1.2196 (int6+brotli) | 800ms | 16.67MB ❌ | — | Diffusion ON (8% aux, off at 70%). +47ms/step overhead, 2× memory (51GB), 46 fewer steps. Quant gap 0.009. Diffusion dead on SP8192 stack. |
 | v3      | 1.2138  | sw 1.2362 (int6+brotli) | 825ms | 15.94MB ✅ | — | Diffusion ON (bug: intended OFF). TARGET_MB=15.2. 44.4% pruned. Aggressive pruning costs +0.017 BPB vs v2. |
 | v4      | 1.2046  | sw 1.2283 (int6+brotli) | 751ms | 15.94MB ✅ | — | **Diffusion OFF (confirmed).** TARGET_MB=15.2. 784 steps (vs v3's 713). 25.9 GiB peak (half v3). Best 1xH100 result. |
+| v5      | 1.2051  | _(skipped)_ | 755ms | — | cde0153 | Diffusion 3%, stop@50%, 10% subsample. Compile warm-up fix. 780 steps. Near-identical to v4. |
 
 ## Iteration Plan
 1. ~~**v1**: Clean run with diffusion disabled — establish SP8192 reference BPB~~ ✅
