@@ -1793,6 +1793,8 @@ def main() -> None:
     if 8 % world_size != 0:
         raise ValueError(f"WORLD_SIZE={world_size} must divide 8 so grad_accum_steps stays integral")
     grad_accum_steps = 8 // world_size
+    if args.weight_share:
+        grad_accum_steps *= 2  # halve micro-batch to fit 2x activation memory
     grad_scale = 1.0 / grad_accum_steps
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
