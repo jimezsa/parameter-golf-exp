@@ -75,6 +75,8 @@ torchrun --standalone --nproc_per_node=8 experiments/011-ar-diffusion-sp8192/tra
 | v6      | 1.2060  | sw 1.2312 (int6+brotli) | 762ms | 15.94MB ✅ | — | Diffusion 3%, stop@50%, full quant pipeline. 772 steps. Post-EMA 1.2181. Confirms diffusion dead on SP8192 — v4 remains best. |
 | latent v1 | **1.2022** | _(skipped)_ | 763ms | — | d9bb665 | **Latent MSE diffusion.** Bypasses 8192-dim vocab projection → zero overhead (763ms ≈ v4's 751ms). 771 steps. Post-EMA 1.2141. Best raw val_bpb in exp 011. Quant pending. |
 | latent v2 | 1.2051 | _(skipped)_ | 784ms | — | — | Latent MSE, DIFFUSION_AUX_PROB=0.08, stop@50%. 750 steps. Post-EMA 1.2163. Higher diffusion prob hurt — worse than latent v1 (1.2022) by 0.003 BPB. |
+| latent v1 no-ema | **1.2021** | _(skipped)_ | 761ms | — | b60c5d7 | Latent MSE, **EMA removed** from code. 773 steps. Post-train 1.2021. Identical to latent v1 — EMA removal has no impact on raw val_bpb. |
+| latent v3 | 1.2036 | _(skipped)_ | 774ms | — | b60c5d7 | Latent MSE, DIFFUSION_AUX_PROB=0.05, stop@60%. 760 steps. Post-EMA 1.2151. Higher prob + later cutoff — worse than latent v1 (1.2022) by 0.001. |
 
 ## Iteration Plan
 1. ~~**v1**: Clean run with diffusion disabled — establish SP8192 reference BPB~~ ✅
