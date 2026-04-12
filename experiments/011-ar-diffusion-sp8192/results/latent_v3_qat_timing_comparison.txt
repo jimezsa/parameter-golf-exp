@@ -1,0 +1,29 @@
+# Exp 011 Latent v3 — QAT Timing Comparison (1xH100)
+# Question: Does QAT start time matter?
+# Tested LATE_QAT_THRESHOLD=0.15 (early, ~step 115) vs 0.60 (at diffusion off, ~step 450)
+# All other config identical: DIFFUSION_AUX_PROB=0.05, DIFFUSION_STOP_FRAC=0.60,
+#   GPTQ_CALIB_BATCHES=32, SWA_ENABLED=0, latent MSE diffusion
+
+# Config: QAT@15% (latent v3 baseline)
+# LATE_QAT_THRESHOLD=0.15
+# val_bpb=1.2027
+# steps=765
+# step_avg_ms=769.45
+# late_qat_activation_step=~115
+# diffusion_cutoff_step=450
+# model_params=36204632
+# diffusion_params=263168
+
+# Config: QAT@60% (QAT starts when diffusion stops)
+# LATE_QAT_THRESHOLD=0.60
+# val_bpb=1.2024
+# steps=766
+# step_avg_ms=768.04
+# late_qat_activation_step=~450
+# diffusion_cutoff_step=450
+# model_params=36204632
+# diffusion_params=263168
+
+# Conclusion: QAT timing has no meaningful effect on val_bpb (delta=0.0003).
+# Diffusion regularization during the first 60% does the heavy lifting, not QAT overlap.
+# Keeping LATE_QAT_THRESHOLD=0.15 (original latent v3 config) as default.
