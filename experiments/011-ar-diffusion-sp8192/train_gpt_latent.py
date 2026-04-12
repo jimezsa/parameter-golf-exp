@@ -106,7 +106,7 @@ class Hyperparameters:
     diffusion_stop_frac = float(os.environ.get("DIFFUSION_STOP_FRAC", 0.50))  # fraction of wallclock after which diffusion is disabled (1.0 = never stop)
     diffusion_subsample_frac = float(os.environ.get("DIFFUSION_SUBSAMPLE_FRAC", 1.00))  # optional fraction of seq positions for latent MSE loss
     # GPTQ calibration
-    gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 64))
+    gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 32))
     gptq_block_size = int(os.environ.get("GPTQ_BLOCK_SIZE", 128))
     gptq_reserve_seconds = float(os.environ.get("GPTQ_RESERVE_SECONDS", 12.0))
     matrix_bits = int(os.environ.get("MATRIX_BITS", 6))
