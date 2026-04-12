@@ -76,7 +76,7 @@ torchrun --standalone --nproc_per_node=8 experiments/011-ar-diffusion-sp8192/tra
 | latent v1 | **1.2022** | _(skipped)_ | 763ms | — | d9bb665 | **Latent MSE diffusion.** Bypasses 8192-dim vocab projection → zero overhead (763ms ≈ v4's 751ms). 771 steps. Post-EMA 1.2141. Best raw val_bpb in exp 011. Quant pending. |
 | latent v2 | 1.2051 | _(skipped)_ | 784ms | — | — | Latent MSE, DIFFUSION_AUX_PROB=0.08, stop@50%. 750 steps. Post-EMA 1.2163. Higher diffusion prob hurt — worse than latent v1 (1.2022) by 0.003 BPB. |
 | latent v1 no-ema | **1.2021** | _(skipped)_ | 761ms | — | b60c5d7 | Latent MSE, **EMA removed** from code. 773 steps. Post-train 1.2021. Identical to latent v1 — EMA removal has no impact on raw val_bpb. |
-| latent v3 | 1.2036 | _(skipped)_ | 774ms | — | b60c5d7 | Latent MSE, DIFFUSION_AUX_PROB=0.05, stop@60%. 760 steps. Post-EMA 1.2151. Higher prob + later cutoff — worse than latent v1 (1.2022) by 0.001. |
+| latent v3 | 1.2031 | **sw 1.2036** (int6+brotli) | 772ms | **15.90MB ✅** | b60c5d7 | Latent MSE, DIFFUSION_AUX_PROB=0.05, stop@60%, LATE_QAT=0.15. 762 steps. GPTQ quant degradation **0.0005** (near-zero). 20.4% selective pruning. **Best post-quant result in exp 011.** |
 
 ## Iteration Plan
 1. ~~**v1**: Clean run with diffusion disabled — establish SP8192 reference BPB~~ ✅
@@ -117,6 +117,13 @@ torchrun --standalone --nproc_per_node=8 experiments/011-ar-diffusion-sp8192/tra
 - Artifact 15.94MB ✅ (15,935,698 bytes). 45.1% pruning for TARGET_MB=15.2.
 - **Diffusion confirmed dead on SP8192:** v4 (no diffusion) beats v3 (diffusion ON) by 0.008 sw BPB, trains faster (71 more steps), uses half the memory.
 - SP8192 stack superiority confirmed: beats exp 008 v6 (1.2716) by 0.043, exp 009 v7 (1.2753) by 0.047.
+
+**Latent v3 (GPTQ, best post-quant result):**
+- Train val_bpb **1.2031**, post-quant sw BPB **1.2036** — quant degradation only **0.0005 BPB** (near-zero).
+- Artifact **15.90MB ✅** (20.4% selective pruning). 762 steps @ 772ms/step.
+- Config: `SWA_ENABLED=0`, `DIFFUSION_AUX_PROB=0.05`, `DIFFUSION_STOP_FRAC=0.60`, `LATE_QAT_THRESHOLD=0.15`, `GPTQ_CALIB_BATCHES=32`.
+- **Crushes previous best** v4 (sw 1.2283) by **0.025 BPB**. Latent MSE diffusion + late QAT produces the best quantization survival seen in any experiment.
+- Updated leaderboard: latent v3 (1.2036) > v4 (1.2283) > v1 (1.2148) > v2 (1.2196) > v6 (1.2312) > v3-bug (1.2362).
 
 ## Status
 - [x] Proposed by professor + scout
