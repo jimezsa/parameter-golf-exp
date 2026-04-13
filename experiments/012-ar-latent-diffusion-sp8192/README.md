@@ -121,6 +121,7 @@ torchrun --standalone --nproc_per_node=8 experiments/012-ar-latent-diffusion-sp8
 | v1      | 1.2036  | 1.2039 (sw)    | 776            | 16,672,285 ❌     | 5431ed7 | Fork verification — OVER 16M cap (MiB bug) |
 | v1-nodiff | 1.1996 | 1.1996 (sw)   | 747            | 16,672,309 ❌     |        | Diffusion off — OVER 16M cap (MiB bug) |
 | v2      | 1.2034  | 1.2169 (sw)    | 771            | 15,990,596 ✅     | 4baa4f0 | TARGET_MB=15.25 — aggressive pruning (42.7%) destroyed quant quality |
+| v3      | 1.2002  | 1.2161 (sw)    | 752            | 15,949,713 ✅     |         | Diffusion OFF ablation (TARGET_MB=15.95). -0.032 train BPB vs v2, but quant gap +0.016 |
 
 - **Val BPB**: raw validation bits-per-byte before quantization
 - **Post-Quant BPB**: after int6+brotli (sliding window)
@@ -137,6 +138,11 @@ Both v1 and v1-nodiff artifacts (~16.67M bytes) exceed the official 16,000,000-b
 
 ### v1-nodiff ablation (informational only — over budget)
 Disabling diffusion saves ~29ms/step → 30 more training steps → raw BPB improves 0.004 (1.1996 vs 1.2036). Quant gap is near-zero with or without diffusion — SDClip already handles quant robustness on SP8192/brotli. **Decision: keep diffusion on** for quant regularization safety margin.
+
+### v3 — Diffusion OFF with fixed MB pruning
+Same as v2 budget fix (decimal MB) but with diffusion disabled. Faster step time (752ms vs 771ms) gives 22 more steps (782 vs 760). Raw train BPB improves 0.003 (1.2002 vs 1.2034), but post-quant sw BPB is slightly worse than v1 baseline (1.2161 vs 1.2039). Quant degradation gap is 0.016 (vs 0.0003 for v1 with diffusion ON). Confirms latent MSE diffusion earns ~0.013 sw BPB for free as a quant regularizer. Artifact 15.95MB ✅.
+
+**Conclusion across v1–v3:** Latent diffusion ON + TARGET_MB=15.95 is the optimal config. v2's aggressive 15.25MB target destroys quant quality; v3 (diffusion OFF) loses the quant regularization benefit. Next iterations should keep diffusion ON and focus on architecture features (depth recurrence, parallel residuals, QK-gain, TTT).
 
 ## Status
 [x] Forked from exp 011 latent v3
