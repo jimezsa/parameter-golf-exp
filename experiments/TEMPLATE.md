@@ -41,14 +41,14 @@ Concise list of what was modified in train_gpt.py.
 
 ## Iteration Results
 
-| Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Description |
-|---------|---------|----------------|-----------------|---------------|--------|-------------|
-| v1      |         |                |                 |               |        | Initial run |
+| Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact (bytes) | Commit | Description |
+|---------|---------|----------------|-----------------|-------------------|--------|-------------|
+| v1      |         |                |                 |                   |        | Initial run |
 
 - **Val BPB**: raw validation bits-per-byte before quantization
 - **Post-Quant BPB**: after int8+lzma (or int6+lzma if applicable)
 - **Step Time**: average training step time in ms
-- **Artifact Size**: compressed model size (target ≤ 16MB)
+- **Artifact (bytes)**: compressed model size in bytes (target ≤ 16,000,000)
 - **Commit**: short SHA of the code version used
 - **Description**: what changed from the previous version
 
