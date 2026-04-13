@@ -118,7 +118,8 @@ torchrun --standalone --nproc_per_node=8 experiments/012-ar-latent-diffusion-sp8
 
 | Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Description |
 |---------|---------|----------------|----------------|---------------|--------|-------------|
-| v1      | 1.2036  | 1.2039 (sw)    | 776ms          | 15.90MB ✅    |        | Fork verification — matches exp 011 latent v3 |
+| v1      | 1.2036  | 1.2039 (sw)    | 776ms          | 15.90MB ✅    | 5431ed7 | Fork verification — matches exp 011 latent v3 |
+| v1-nodiff | 1.1996 | 1.1996 (sw)   | 747ms          | 16.67MB ❌    |        | Diffusion off — better BPB but artifact over 16MB budget |
 
 - **Val BPB**: raw validation bits-per-byte before quantization
 - **Post-Quant BPB**: after int6+brotli (sliding window)
@@ -130,8 +131,12 @@ torchrun --standalone --nproc_per_node=8 experiments/012-ar-latent-diffusion-sp8
 ## Analysis
 Starting from exp 011 latent v3 (post-quant sw BPB 1.2036, 15.90MB). This is the new project baseline.
 
+### v1-nodiff ablation
+Disabling diffusion saves ~29ms/step → 30 more training steps → raw BPB improves 0.004 (1.1996 vs 1.2036). However artifact hits 16.67MB, over the 16MB budget. Quant gap is near-zero with or without diffusion — SDClip already handles quant robustness on SP8192/brotli. **Decision: keep diffusion on (v1 config) as baseline.** The 0.004 BPB cost is worth the guaranteed artifact compliance.
+
 ## Status
 [x] Forked from exp 011 latent v3
 [x] v1 baseline verification (sw BPB 1.2039, matches exp 011 latent v3)
+[x] v1-nodiff ablation — diffusion off gives -0.004 BPB but artifact over budget (16.67MB ❌)
 [ ] Iterate toward leaderboard competitive (target: <1.10 on 8xH100)
 [ ] Decision: adopt / discard / iterate
