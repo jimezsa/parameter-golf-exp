@@ -1,9 +1,26 @@
 # Experiment 012: AR Latent Diffusion SP8192
 
-## Paper / Source
-- Inherits latent MSE diffusion approach from Exp 011 (latent v3 — project best)
-- Stack: SP8192 + brotli-11 + byte-shuffle + SDClip + MuonEq-R + QK-Gain 5.0
-- Key insight: latent-space diffusion (hidden states, not vocab logits) gives zero step-time overhead and near-zero quant degradation (0.0005 BPB gap)
+## Literature Foundation: Latent Diffusion as AR Regularizer
+
+Recent deep search into autoregressive (AR) models and diffusion reveals that adding a continuous latent diffusion prior mitigates exposure bias, condition inconsistency, and overfitting. This strongly justifies the approach in Exp 012.
+
+### Core Findings & Implementation Mapping
+
+1. **Global Structural Coherence (STAR-LDM)**
+   - **Literature**: [STAR-LDM: Stop-Think-AutoRegress (arXiv:2602.20528)](https://arxiv.org/abs/2602.20528) proves that a latent diffusion planning phase enforces structural coherence, correcting the local bias of next-token generation.
+   - **Implementation (`train_gpt.py`)**: We replicate this by jointly optimizing the AR next-token loss alongside a continuous latent diffusion matching loss via `_diffusion_loss()` on the final hidden states before the LM head (lines 1220-1250, 1276-1277).
+
+2. **Combating AR Exposure Bias via Optimal Transport**
+   - **Literature**: [Condition Errors Refinement with Diffusion Loss (arXiv:2602.07022)](https://arxiv.org/abs/2602.07022) uses diffusion loss to pull intermediate corrupted AR states back to the ideal uncorrupted manifold.
+   - **Implementation (`train_gpt.py`)**: Our loss adds a structural anchor (`self.diffusion_loss_weight * self._diffusion_loss(...)` at line 1277) to explicitly correct representation drift during the forward pass.
+
+3. **Continuous Structural Priors**
+   - **Literature**: [Latent-Autoregressive GP-VAE (arXiv:2512.09535)](https://arxiv.org/abs/2512.09535) shows that continuous structural priors prevent generation collapse.
+   - **Implementation (`train_gpt.py`)**: By projecting to a continuous latent space via `latent_proj` (line 1014), we regularize over continuous trajectories rather than using discrete token-space rounding, which is inherently unstable.
+
+4. **Implicit Data Augmentation & Robustness**
+   - **Literature**: [Diffusion Beats Autoregressive in Data-Constrained Settings (arXiv:2507.15857)](https://arxiv.org/abs/2507.15857) demonstrates that masking/noising objectives natively resist saturation.
+   - **Implementation (`train_gpt.py`)**: Implemented via randomized partial application. The `DIFFUSION_AUX_PROB` flag (parsed at line 105, used at 2271-2275) dynamically triggers the diffusion pass on a subset of iterations. This acts as implicit data augmentation without imposing massive step-time overhead on every step.
 
 ## Hypothesis
 Exp 011 latent v3 achieved post-quant sw BPB 1.2036 (15.90MB) with near-zero quant gap. This experiment continues iteration from that baseline to push BPB lower via depth recurrence, parallel residuals, QK-gain tuning, and compression improvements.
