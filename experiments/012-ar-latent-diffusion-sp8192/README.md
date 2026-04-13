@@ -116,23 +116,27 @@ torchrun --standalone --nproc_per_node=8 experiments/012-ar-latent-diffusion-sp8
 
 ## Iteration Results
 
-| Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Description |
-|---------|---------|----------------|----------------|---------------|--------|-------------|
-| v1      | 1.2036  | 1.2039 (sw)    | 776ms          | 15.90MB ✅    | 5431ed7 | Fork verification — matches exp 011 latent v3 |
-| v1-nodiff | 1.1996 | 1.1996 (sw)   | 747ms          | 16.67MB ❌    |        | Diffusion off — better BPB but artifact over 16MB budget |
+| Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact (bytes) | Commit | Description |
+|---------|---------|----------------|----------------|-------------------|--------|-------------|
+| v1      | 1.2036  | 1.2039 (sw)    | 776            | 16,672,285 ❌     | 5431ed7 | Fork verification — OVER 16M cap (MiB bug) |
+| v1-nodiff | 1.1996 | 1.1996 (sw)   | 747            | 16,672,309 ❌     |        | Diffusion off — OVER 16M cap (MiB bug) |
+| v2      | 1.2034  | 1.2169 (sw)    | 771            | 15,990,596 ✅     | 4baa4f0 | TARGET_MB=15.25 — aggressive pruning (42.7%) destroyed quant quality |
 
 - **Val BPB**: raw validation bits-per-byte before quantization
 - **Post-Quant BPB**: after int6+brotli (sliding window)
 - **Step Time**: average training step time in ms
-- **Artifact Size**: compressed model size (target <= 16MB)
+- **Artifact (bytes)**: total submission size in bytes (budget ≤ 16,000,000 = 16 MB decimal)
 - **Commit**: short SHA of the code version used
 - **Description**: what changed from the previous version
 
 ## Analysis
 Starting from exp 011 latent v3 (post-quant sw BPB 1.2036, 15.90MB). This is the new project baseline.
 
-### v1-nodiff ablation
-Disabling diffusion saves ~29ms/step → 30 more training steps → raw BPB improves 0.004 (1.1996 vs 1.2036). However artifact hits 16.67MB, over the 16MB budget. Quant gap is near-zero with or without diffusion — SDClip already handles quant robustness on SP8192/brotli. **Decision: keep diffusion on (v1 config) as baseline.** The 0.004 BPB cost is worth the guaranteed artifact compliance.
+### v1/v1-nodiff — OVER BUDGET (MiB bug)
+Both v1 and v1-nodiff artifacts (~16.67M bytes) exceed the official 16,000,000-byte cap. The selective_prune function was using `target_mb * 1024 * 1024` (MiB) instead of `target_mb * 1_000_000` (decimal MB). Fixed in train_gpt.py: pruning now uses decimal MB, default TARGET_MB changed from 15.9 to 15.95. v3 will be the first valid-budget run with diffusion on.
+
+### v1-nodiff ablation (informational only — over budget)
+Disabling diffusion saves ~29ms/step → 30 more training steps → raw BPB improves 0.004 (1.1996 vs 1.2036). Quant gap is near-zero with or without diffusion — SDClip already handles quant robustness on SP8192/brotli. **Decision: keep diffusion on** for quant regularization safety margin.
 
 ## Status
 [x] Forked from exp 011 latent v3

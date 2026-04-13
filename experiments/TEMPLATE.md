@@ -48,7 +48,7 @@ Concise list of what was modified in train_gpt.py.
 - **Val BPB**: raw validation bits-per-byte before quantization
 - **Post-Quant BPB**: after int8+lzma (or int6+lzma if applicable)
 - **Step Time**: average training step time in ms
-- **Artifact (bytes)**: compressed model size in bytes (target ≤ 16,000,000)
+- **Artifact (bytes)**: total submission size in bytes (budget ≤ 16,000,000 = 16 MB decimal)
 - **Commit**: short SHA of the code version used
 - **Description**: what changed from the previous version
 

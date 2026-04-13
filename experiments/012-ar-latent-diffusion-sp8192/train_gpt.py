@@ -2433,7 +2433,7 @@ def main() -> None:
     # NOVEL: Selective ±1 pruning by reconstruction error
     # Sort ±1 quantized values by their reconstruction error (scale²),
     # prune least-impactful first until artifact fits target size.
-    target_mb = float(os.environ.get("TARGET_MB", "15.25"))
+    target_mb = float(os.environ.get("TARGET_MB", "15.95"))
     code_bytes_est = len(code.encode("utf-8"))
     ones_info = []  # (tensor_key, flat_idx, error)
     for name, info in quant_meta.items():
@@ -2458,13 +2458,13 @@ def main() -> None:
             buf = io.BytesIO(); torch.save({"w": tmp, "m": quant_meta}, buf)
             return len(_compress_quant_payload(buf.getvalue(), args.compressor)) + code_bytes_est, tmp
         no_sz, _ = _try_prune(0)
-        target_bytes = int(target_mb * 1024 * 1024)
-        log0(f"selective_prune: {len(ones_info)} ±1 candidates, unpruned={no_sz/(1024*1024):.2f}MB target={target_mb}MB")
+        target_bytes = int(target_mb * 1_000_000)  # decimal MB (cap = 16,000,000 bytes)
+        log0(f"selective_prune: {len(ones_info)} ±1 candidates, unpruned={no_sz/1e6:.2f}MB target={target_mb}MB")
         if no_sz <= target_bytes:
             log0("selective_prune: already fits, no pruning needed")
         else:
             full_sz, _ = _try_prune(len(ones_info))
-            log0(f"selective_prune: full ±1 prune={full_sz/(1024*1024):.2f}MB")
+            log0(f"selective_prune: full ±1 prune={full_sz/1e6:.2f}MB")
             if full_sz > target_bytes:
                 log0("selective_prune: even full prune not enough, applying all")
                 _, quant_result = _try_prune(len(ones_info))
