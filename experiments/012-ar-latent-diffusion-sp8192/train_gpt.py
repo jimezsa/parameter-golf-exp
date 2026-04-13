@@ -102,8 +102,8 @@ class Hyperparameters:
     mtp_delay_kill_after = int(os.environ.get("MTP_DELAY_KILL_AFTER", 5000))
     mtp_delay_kill_factor = float(os.environ.get("MTP_DELAY_KILL_FACTOR", 2.0))
     diffusion_loss_weight = float(os.environ.get("DIFFUSION_LOSS_WEIGHT", 0.50))
-    diffusion_aux_prob = float(os.environ.get("DIFFUSION_AUX_PROB", 0.03))
-    diffusion_stop_frac = float(os.environ.get("DIFFUSION_STOP_FRAC", 0.50))  # fraction of wallclock after which diffusion is disabled (1.0 = never stop)
+    diffusion_aux_prob = float(os.environ.get("DIFFUSION_AUX_PROB", 0.05))
+    diffusion_stop_frac = float(os.environ.get("DIFFUSION_STOP_FRAC", 0.60))  # fraction of wallclock after which diffusion is disabled (1.0 = never stop)
     diffusion_subsample_frac = float(os.environ.get("DIFFUSION_SUBSAMPLE_FRAC", 1.00))  # optional fraction of seq positions for latent MSE loss
     # GPTQ calibration
     gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 32))
