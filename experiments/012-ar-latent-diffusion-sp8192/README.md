@@ -118,7 +118,7 @@ torchrun --standalone --nproc_per_node=8 experiments/012-ar-latent-diffusion-sp8
 
 | Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Description |
 |---------|---------|----------------|----------------|---------------|--------|-------------|
-| v1      |         |                |                |               |        | Baseline — identical to exp 011 latent v3 config |
+| v1      | 1.2036  | 1.2039 (sw)    | 776ms          | 15.90MB ✅    |        | Fork verification — matches exp 011 latent v3 |
 
 - **Val BPB**: raw validation bits-per-byte before quantization
 - **Post-Quant BPB**: after int6+brotli (sliding window)
@@ -132,6 +132,6 @@ Starting from exp 011 latent v3 (post-quant sw BPB 1.2036, 15.90MB). This is the
 
 ## Status
 [x] Forked from exp 011 latent v3
-[ ] v1 baseline verification
+[x] v1 baseline verification (sw BPB 1.2039, matches exp 011 latent v3)
 [ ] Iterate toward leaderboard competitive (target: <1.10 on 8xH100)
 [ ] Decision: adopt / discard / iterate
