@@ -95,7 +95,9 @@ Starting point: `train_gpt_latent.py` from exp 011 (latent v3 config).
 - **Steps / Duration**: 10 minutes wallclock
 - Data prep (run once per pod):
 ```bash
-python3 data/cached_challenge_fineweb.py --variant sp8192
+# SP8192 shards live in kevclark/parameter-golf, NOT the default repo
+rm -f data/manifest.json
+MATCHED_FINEWEB_REPO_ID=kevclark/parameter-golf python3 data/cached_challenge_fineweb.py --variant sp8192 --train-shards 128
 ```
 - Dependencies:
 ```bash
@@ -129,6 +131,7 @@ torchrun --standalone --nproc_per_node=8 experiments/012-ar-latent-diffusion-sp8
 | v8      | 1.2045  | — (SKIP_QUANT) | 783            | —                 | 0bbe3b2 | Baseline rerun (no recurrence, no delayed diff). Clean reference. |
 | v10     | **1.2025** | — (SKIP_QUANT) | 769         | —                 | 9edddbe | **New best.** Delayed diffusion (25%–60% window). 765 steps. ✅ |
 | v11     | 1.2030  | — (SKIP_QUANT) | 774            | —                 |         | Diffusion 25%–75% window. Wider tail = 5 fewer steps, +0.0005 vs v10. ❌ |
+| **baseline 8x** | **1.0968** | **1.1272 (sw)** | ~106 | 15,989,969 ✅ | — | **8xH100 reference** (`train_gpt_baseline.py`). 5566 steps, 588s. Quant gap +0.030. |
 
 - **Val BPB**: raw validation bits-per-byte before quantization
 - **Post-Quant BPB**: after int6+brotli (sliding window)
