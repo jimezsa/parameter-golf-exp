@@ -21,6 +21,10 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from flash_attn_interface import flash_attn_func as flash_attn_3_func
 from liger_kernel.ops.cross_entropy import LigerCrossEntropyFunction
 
+@torch.compiler.disable
+def _liger_ce(logits, targets, reduction="mean"):
+    return LigerCrossEntropyFunction.apply(logits, targets, None, -100, 0.0, 0.0, reduction, None, False)
+
 class Hyperparameters:
     data_path = os.environ.get("DATA_PATH", "./data/datasets/fineweb10B_sp8192")
     train_files = os.path.join(data_path, "fineweb_train_*.bin")
@@ -889,7 +893,7 @@ class GPT(nn.Module):
         x_flat = x.reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
         logits = self._project_logits(x_flat)
-        main_loss = LigerCrossEntropyFunction.apply(logits, targets, None, -100, 0.0, 0.0, "mean", None, False)
+        main_loss = _liger_ce(logits, targets)
         if self.training and run_aux_diffusion and self.diffusion_loss_weight > 0.0:
             main_loss = main_loss + self.diffusion_loss_weight * self._diffusion_loss(input_ids, target_ids, self.diffusion_subsample_frac)
         return main_loss
@@ -943,10 +947,10 @@ def eval_val_sliding(
                 y_batch[i, :wlen] = chunk[1:]
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 logits = compiled_logits(x_batch)
-            nll = LigerCrossEntropyFunction.apply(
+            nll = _liger_ce(
                 logits.reshape(-1, logits.size(-1)),
                 y_batch.reshape(-1),
-                None, -100, 0.0, 0.0, "none", None, False,
+                "none",
             ).reshape(bsz, seq_len)
             for i, ws in enumerate(batch_ws):
                 wlen = wlens[i]
@@ -1254,7 +1258,7 @@ class _HessianGPT(nn.Module):
         targets = target_ids.reshape(-1)
         logits_proj = F.linear(x_flat, self.tok_emb.weight) if self.tie_embeddings else self.lm_head(x_flat)
         logits = self.logit_softcap * torch.tanh(logits_proj / self.logit_softcap)
-        return LigerCrossEntropyFunction.apply(logits, targets, None, -100, 0.0, 0.0, "mean", None, False)
+        return _liger_ce(logits, targets)
 
 def collect_hessians(hessian_model, train_loader, args, device, grad_accum_steps, num_batches=256):
     """Run calibration batches through a non-banked model, collecting H = X^T X for each CastedLinear."""
