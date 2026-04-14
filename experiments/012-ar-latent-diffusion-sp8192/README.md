@@ -126,6 +126,8 @@ torchrun --standalone --nproc_per_node=8 experiments/012-ar-latent-diffusion-sp8
 | v5      | 1.2063  | — (SKIP_QUANT) | 786            | —                 |         | QK-gain 5.25 + warmdown 72%. Slight regression vs v2. Discarded ❌ |
 | v6      | 1.2134  | — (SKIP_QUANT) | 928            | —                 | 93af936 | Delayed depth recurrence (layers 3,5 @35%). +18% step time → 634 steps. Regression ❌ |
 | v7      | 1.2042  | — (SKIP_QUANT) | 784            | —                 | edf9319 | Parallel residuals (GPT-J, layers 7+) + WD=0.095. No effect vs v2 baseline ❌ |
+| v8      | 1.2045  | — (SKIP_QUANT) | 783            | —                 | 0bbe3b2 | Baseline rerun (no recurrence, no delayed diff). Clean reference. |
+| v10     | **1.2025** | — (SKIP_QUANT) | 769         | —                 | 9edddbe | **New best.** Delayed diffusion (25%–60% window). 765 steps. ✅ |
 
 - **Val BPB**: raw validation bits-per-byte before quantization
 - **Post-Quant BPB**: after int6+brotli (sliding window)
@@ -157,11 +159,18 @@ Depth recurrence on layers [3,5] with 2 passes, delayed activation at 35% wallcl
 ### v7 — Parallel residuals + WD=0.095 (discarded)
 GPT-J-style parallel residuals from layer 7+ (parallel_start_layer=7) with WD increased from 0.090 to 0.095. Step time 784ms (essentially unchanged from v2's 771ms), 751 steps. val_bpb 1.2042 vs v2 baseline 1.2034 — delta +0.0008, within noise. Parallel residuals add no measurable gain at this scale, and WD=0.095 vs 0.090 is also a no-op. Discarded.
 
+### v8 — Baseline rerun (clean reference)
+No recurrence, no delayed diffusion — pure baseline config. val_bpb 1.2045, 783ms/step, 751 steps. Matches v2 within noise. Confirms baseline is stable at 1.2045.
+
+### v10 — Delayed diffusion start (25%–60% window) ✅ NEW BEST
+Diffusion only active from 25% to 60% of training (DIFFUSION_START_FRAC=0.25, DIFFUSION_STOP_FRAC=0.60). Diffusion-free early phase lets model learn pure AR first, then diffusion regularizes mid-training, then off for final warmdown/QAT. Avg step time drops to 769ms (from 783ms baseline) because diffusion is off for 65% of steps. Gets 765 steps (vs 751 baseline). val_bpb **1.2025** — improvement of 0.002 over baseline. Best pre-quant in exp 012.
+
 **Score so far — top-5 leaderboard techniques on 1xH100:**
 - Depth recurrence (v4, v6): regression, too expensive on 1xH100
 - QK-gain 5.25 (v5): regression
 - Parallel residuals (v7): no effect
 - WD tuning (v7): no effect
+- **Delayed diffusion window (v10): +0.002 improvement** ✅
 
 ## Status
 [x] Forked from exp 011 latent v3
