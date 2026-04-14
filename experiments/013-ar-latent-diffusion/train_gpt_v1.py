@@ -23,7 +23,8 @@ from liger_kernel.ops.cross_entropy import LigerCrossEntropyFunction
 
 @torch.compiler.disable
 def _liger_ce(logits, targets, reduction="mean"):
-    return LigerCrossEntropyFunction.apply(logits, targets, None, -100, 0.0, 0.0, reduction, None, False)
+    result = LigerCrossEntropyFunction.apply(logits, targets, None, -100, 0.0, 0.0, reduction, None, False)
+    return result[0] if isinstance(result, tuple) else result
 
 class Hyperparameters:
     data_path = os.environ.get("DATA_PATH", "./data/datasets/fineweb10B_sp8192")
