@@ -20,8 +20,8 @@ from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from flash_attn_interface import flash_attn_func as flash_attn_3_func
 from liger_kernel.ops.cross_entropy import LigerCrossEntropyFunction
-torch._dynamo.allow_in_graph(LigerCrossEntropyFunction)
 
+@torch.compiler.disable
 def _liger_ce(logits, targets, reduction="mean"):
     return LigerCrossEntropyFunction.apply(logits, targets, None, -100, 0.0, 0.0, reduction, None, False)
 
@@ -1519,7 +1519,7 @@ def main() -> None:
     restore_low_dim_params_to_fp32(base_model)
     # No DDP -- Parallel Muon handles bank grad communication via reduce-scatter,
     # and non-bank grads are manually all-reduced before Adam steps.
-    compiled_model = torch.compile(base_model, dynamic=False, fullgraph=True)
+    compiled_model = torch.compile(base_model, dynamic=False, fullgraph=False)
     model = compiled_model
 
     matrix_params = [
@@ -1972,7 +1972,7 @@ def main() -> None:
             m.float()
     restore_low_dim_params_to_fp32(eval_model)
     eval_model.load_state_dict(deq_state, strict=True)
-    compiled_eval = torch.compile(eval_model, dynamic=False, fullgraph=True)
+    compiled_eval = torch.compile(eval_model, dynamic=False, fullgraph=False)
     torch.cuda.synchronize()
     t_qeval = time.perf_counter()
     q_val_loss, q_val_bpb = eval_val(
