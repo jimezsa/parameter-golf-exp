@@ -125,6 +125,7 @@ torchrun --standalone --nproc_per_node=8 experiments/012-ar-latent-diffusion-sp8
 | v4      | 1.2140  | — (SKIP_QUANT) | 909            | —                 |         | Depth recurrence (layers 4-5, 1 extra pass). +16% step time → 103 fewer steps. Regression ❌ |
 | v5      | 1.2063  | — (SKIP_QUANT) | 786            | —                 |         | QK-gain 5.25 + warmdown 72%. Slight regression vs v2. Discarded ❌ |
 | v6      | 1.2134  | — (SKIP_QUANT) | 928            | —                 | 93af936 | Delayed depth recurrence (layers 3,5 @35%). +18% step time → 634 steps. Regression ❌ |
+| v7      | 1.2042  | — (SKIP_QUANT) | 784            | —                 | edf9319 | Parallel residuals (GPT-J, layers 7+) + WD=0.095. No effect vs v2 baseline ❌ |
 
 - **Val BPB**: raw validation bits-per-byte before quantization
 - **Post-Quant BPB**: after int6+brotli (sliding window)
@@ -152,6 +153,15 @@ QK_GAIN_INIT=5.25 (was 5.0) + WARMDOWN_FRAC=0.72 (was 0.667). Zero overhead (786
 
 ### v6 — Delayed depth recurrence (discarded)
 Depth recurrence on layers [3,5] with 2 passes, delayed activation at 35% wallclock. Step time jumps from ~785ms to 928ms after activation (+18%), cutting total steps from ~750 to 634 (-116 steps). val_bpb regresses to 1.2134 (+0.0089 vs v2 baseline 1.2045). Same conclusion as v4: depth recurrence is too expensive on 1xH100 — the step count penalty outweighs any representational benefit. Top-5 submissions run recurrence on 8xH100 where they have ~4800 steps to absorb overhead. Discarded.
+
+### v7 — Parallel residuals + WD=0.095 (discarded)
+GPT-J-style parallel residuals from layer 7+ (parallel_start_layer=7) with WD increased from 0.090 to 0.095. Step time 784ms (essentially unchanged from v2's 771ms), 751 steps. val_bpb 1.2042 vs v2 baseline 1.2034 — delta +0.0008, within noise. Parallel residuals add no measurable gain at this scale, and WD=0.095 vs 0.090 is also a no-op. Discarded.
+
+**Score so far — top-5 leaderboard techniques on 1xH100:**
+- Depth recurrence (v4, v6): regression, too expensive on 1xH100
+- QK-gain 5.25 (v5): regression
+- Parallel residuals (v7): no effect
+- WD tuning (v7): no effect
 
 ## Status
 [x] Forked from exp 011 latent v3
