@@ -124,6 +124,7 @@ torchrun --standalone --nproc_per_node=8 experiments/012-ar-latent-diffusion-sp8
 | v3      | 1.2002  | 1.2161 (sw)    | 752            | 15,949,713 ✅     |         | Diffusion OFF ablation (TARGET_MB=15.95). -0.032 train BPB vs v2, but quant gap +0.016 |
 | v4      | 1.2140  | — (SKIP_QUANT) | 909            | —                 |         | Depth recurrence (layers 4-5, 1 extra pass). +16% step time → 103 fewer steps. Regression ❌ |
 | v5      | 1.2063  | — (SKIP_QUANT) | 786            | —                 |         | QK-gain 5.25 + warmdown 72%. Slight regression vs v2. Discarded ❌ |
+| v6      | 1.2134  | — (SKIP_QUANT) | 928            | —                 | 93af936 | Delayed depth recurrence (layers 3,5 @35%). +18% step time → 634 steps. Regression ❌ |
 
 - **Val BPB**: raw validation bits-per-byte before quantization
 - **Post-Quant BPB**: after int6+brotli (sliding window)
@@ -148,6 +149,9 @@ Same as v2 budget fix (decimal MB) but with diffusion disabled. Faster step time
 
 ### v5 — QK-gain 5.25 + warmdown 72% (discarded)
 QK_GAIN_INIT=5.25 (was 5.0) + WARMDOWN_FRAC=0.72 (was 0.667). Zero overhead (786ms vs 783ms), but val_bpb regressed to 1.2063 (+0.0018 vs v2 baseline 1.2045). QK-gain effect may require depth recurrence to be active — all top-5 submissions use them together. Discarded.
+
+### v6 — Delayed depth recurrence (discarded)
+Depth recurrence on layers [3,5] with 2 passes, delayed activation at 35% wallclock. Step time jumps from ~785ms to 928ms after activation (+18%), cutting total steps from ~750 to 634 (-116 steps). val_bpb regresses to 1.2134 (+0.0089 vs v2 baseline 1.2045). Same conclusion as v4: depth recurrence is too expensive on 1xH100 — the step count penalty outweighs any representational benefit. Top-5 submissions run recurrence on 8xH100 where they have ~4800 steps to absorb overhead. Discarded.
 
 ## Status
 [x] Forked from exp 011 latent v3
