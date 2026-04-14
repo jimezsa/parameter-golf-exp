@@ -1516,6 +1516,11 @@ def main() -> None:
     # and non-bank grads are manually all-reduced before Adam steps.
     compiled_model = torch.compile(base_model, dynamic=False, fullgraph=True)
     model = compiled_model
+    # Delayed recurrence: start without recurrence, activate at recurrence_start_frac
+    _target_recurrence_depth = args.recurrence_depth
+    _recurrence_activated = _target_recurrence_depth <= 1
+    if _target_recurrence_depth > 1 and args.recurrence_start_frac > 0:
+        base_model.recurrence_depth = 1
 
     matrix_params = [
         base_model.qo_bank, base_model.kv_bank,
@@ -1653,9 +1658,10 @@ def main() -> None:
             for micro_step in range(grad_accum_steps):
                 x, y = train_loader.next_batch(args.train_batch_tokens, grad_accum_steps)
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
-                    # Force both code paths through torch.compile during warmup:
-                    # step 0 → diffusion ON, step 1 → diffusion OFF (if diffusion configured)
-                    # This avoids a ~17s recompile on the first real diffusion step.
+                    # Force all code paths through torch.compile during warmup:
+                    # step 0 → diffusion ON, step 1 → diffusion OFF
+                    # step 2 → recurrence ON, step 3 → recurrence OFF
+                    # This avoids ~17s recompile stalls on the first real activation.
                     has_diffusion = args.diffusion_loss_weight > 0.0 and args.diffusion_aux_prob > 0.0
                     if has_diffusion and warmup_step == 0:
                         warmup_use_diffusion = True
@@ -1663,6 +1669,11 @@ def main() -> None:
                         warmup_use_diffusion = False
                     else:
                         warmup_use_diffusion = has_diffusion and random.random() < args.diffusion_aux_prob
+                    # Pre-compile recurrence path during warmup
+                    if _target_recurrence_depth > 1 and warmup_step == 2:
+                        base_model.recurrence_depth = _target_recurrence_depth
+                    elif _target_recurrence_depth > 1 and warmup_step == 3:
+                        base_model.recurrence_depth = 1
                     warmup_loss = model(x, y, warmup_use_diffusion)
                 (warmup_loss * grad_scale).backward()
             # All-reduce all grads for warmup (simple, not optimized)
@@ -1721,7 +1732,13 @@ def main() -> None:
                 )
             break
         elapsed_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
-        # Depth recurrence is always-on when depth > 1 (no runtime toggle — torch.compile fullgraph=True incompatible)
+        # Delayed depth recurrence: activate at recurrence_start_frac of wallclock
+        if not _recurrence_activated and _target_recurrence_depth > 1:
+            wallclock_frac = elapsed_ms / max_wallclock_ms if max_wallclock_ms else step / max(args.iterations, 1)
+            if wallclock_frac >= args.recurrence_start_frac:
+                base_model.recurrence_depth = _target_recurrence_depth
+                _recurrence_activated = True
+                log0(f"recurrence:activated depth={_target_recurrence_depth} layers=[{args.recurrence_start},{args.recurrence_end}] step:{step} frac:{wallclock_frac:.3f}")
         scale = lr_mul(step, elapsed_ms)
         if args.late_qat_threshold > 0 and scale < args.late_qat_threshold and not CastedLinear._qat_enabled:
             CastedLinear._qat_enabled = True
