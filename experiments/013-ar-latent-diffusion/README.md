@@ -9,6 +9,7 @@ The eval phase gets its own separate 10-minute budget (not counted against train
 ## Improvements Over Exp 012
 
 ### 1. AR Self-Gen Calibration (primary lever)
+
 - Generate 64+ sequences at eval time for GPTQ calibration (not limited to training data)
 - Same technique as exp 009 v7 which achieved near-zero quant degradation (0.001 gap)
 - Legal in eval phase — separate 10-min budget
@@ -26,23 +27,27 @@ The eval phase gets its own separate 10-minute budget (not counted against train
 - Post-quant sw BPB: 1.2036 (1xH100, quant gap 0.0005)
 
 ## Run Config
+
 - **GPU**: 1x H100 (dev) / 8x H100 (final)
 - **Steps / Duration**: 10 minutes wallclock
 - Data prep:
+
 ```bash
+pip install brotli sentencepiece
+MATCHED_FINEWEB_REPO_ID=kevclark/parameter-golf python3 data/cached_challenge_fineweb.py --variant sp8192
 python3 data/cached_challenge_fineweb.py --variant sp8192
 ```
-- Dependencies:
-```bash
-pip install brotli
-```
+
 - Run (1x H100 dev):
+
 ```bash
 RUN_ID=exp013_ar_latent_diffusion \
 SEED=1337 \
 torchrun --standalone --nproc_per_node=1 experiments/013-ar-latent-diffusion/train_gpt.py
 ```
+
 - Run (8x H100 final):
+
 ```bash
 RUN_ID=exp013_ar_latent_diffusion \
 SEED=1337 \
@@ -51,18 +56,19 @@ torchrun --standalone --nproc_per_node=8 experiments/013-ar-latent-diffusion/tra
 
 ## Iteration Plan
 
-| Version | Focus | Description |
-|---------|-------|-------------|
-| v1 | AR self-gen calibration | Add 64-seq AR calibration during eval phase |
-| v2+ | Iteration | Sweep calibration params, further tuning |
+| Version | Focus                   | Description                                 |
+| ------- | ----------------------- | ------------------------------------------- |
+| v1      | AR self-gen calibration | Add 64-seq AR calibration during eval phase |
+| v2+     | Iteration               | Sweep calibration params, further tuning    |
 
 ## Iteration Results
 
-| Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact (bytes) | Commit | Description |
-|---------|---------|----------------|----------------|-------------------|--------|-------------|
-| (pending) | | | | | | |
+| Version   | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact (bytes) | Commit | Description |
+| --------- | ------- | -------------- | -------------- | ---------------- | ------ | ----------- |
+| (pending) |         |                |                |                  |        |             |
 
 ## Status
+
 - [x] Forked from exp 012
 - [ ] v1: AR self-gen calibration
 - [ ] Iteration runs
