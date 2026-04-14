@@ -122,6 +122,7 @@ torchrun --standalone --nproc_per_node=8 experiments/012-ar-latent-diffusion-sp8
 | v1-nodiff | 1.1996 | 1.1996 (sw)   | 747            | 16,672,309 ❌     |        | Diffusion off — OVER 16M cap (MiB bug) |
 | v2      | 1.2034  | 1.2169 (sw)    | 771            | 15,990,596 ✅     | 4baa4f0 | TARGET_MB=15.25 — aggressive pruning (42.7%) destroyed quant quality |
 | v3      | 1.2002  | 1.2161 (sw)    | 752            | 15,949,713 ✅     |         | Diffusion OFF ablation (TARGET_MB=15.95). -0.032 train BPB vs v2, but quant gap +0.016 |
+| v4      | 1.2140  | — (SKIP_QUANT) | 909            | —                 |         | Depth recurrence (layers 4-5, 1 extra pass). +16% step time → 103 fewer steps. Regression ❌ |
 
 - **Val BPB**: raw validation bits-per-byte before quantization
 - **Post-Quant BPB**: after int6+brotli (sliding window)
