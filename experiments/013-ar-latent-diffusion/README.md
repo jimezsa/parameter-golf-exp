@@ -14,20 +14,6 @@ The eval phase gets its own separate 10-minute budget (not counted against train
 - Legal in eval phase — separate 10-min budget
 - Expected impact: -0.035 to -0.043 BPB post-quant
 
-### 2. Depth Recurrence (layers 4-5, 3-layer stack)
-- Used by all top-5 leaderboard submissions
-- Reuses layers 4-5-6 for a second pass — adds depth without parameters
-- Expected impact: -0.01 to -0.02 BPB
-
-### 3. Parallel Residuals (GPT-J style from layer 7+)
-- Consistent leaderboard gain across top submissions
-- MLP and attention in parallel instead of sequential
-- Expected impact: -0.005 to -0.010 BPB
-
-### 4. QK-Gain Tune (5.0 → 5.25)
-- Minor but free — observed in leaderboard leaders
-- Expected impact: -0.001 to -0.003 BPB
-
 ## Baseline (inherited from Exp 012 latent v3)
 
 - SP8192 tokenizer, 11L/512d
@@ -68,10 +54,7 @@ torchrun --standalone --nproc_per_node=8 experiments/013-ar-latent-diffusion/tra
 | Version | Focus | Description |
 |---------|-------|-------------|
 | v1 | AR self-gen calibration | Add 64-seq AR calibration during eval phase |
-| v2 | Depth recurrence | Add 3-layer recurrence on layers 4-5 |
-| v3 | Parallel residuals | GPT-J style from layer 7+ |
-| v4 | QK-gain + tuning | Fine-tune QK-gain 5.25, sweep other small knobs |
-| v5+ | Integration | Best combo, final tuning |
+| v2+ | Iteration | Sweep calibration params, further tuning |
 
 ## Iteration Results
 
@@ -82,8 +65,5 @@ torchrun --standalone --nproc_per_node=8 experiments/013-ar-latent-diffusion/tra
 ## Status
 - [x] Forked from exp 012
 - [ ] v1: AR self-gen calibration
-- [ ] v2: Depth recurrence
-- [ ] v3: Parallel residuals
-- [ ] v4: QK-gain tuning
-- [ ] Integration run
+- [ ] Iteration runs
 - [ ] Decision: adopt / discard / iterate
