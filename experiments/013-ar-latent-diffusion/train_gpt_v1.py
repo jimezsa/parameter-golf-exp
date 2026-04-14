@@ -20,8 +20,8 @@ from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from flash_attn_interface import flash_attn_func as flash_attn_3_func
 from liger_kernel.ops.cross_entropy import LigerCrossEntropyFunction
+torch._dynamo.allow_in_graph(LigerCrossEntropyFunction)
 
-@torch.compiler.disable
 def _liger_ce(logits, targets, reduction="mean"):
     return LigerCrossEntropyFunction.apply(logits, targets, None, -100, 0.0, 0.0, reduction, None, False)
 
