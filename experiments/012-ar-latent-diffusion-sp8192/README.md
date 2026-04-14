@@ -128,6 +128,7 @@ torchrun --standalone --nproc_per_node=8 experiments/012-ar-latent-diffusion-sp8
 | v7      | 1.2042  | — (SKIP_QUANT) | 784            | —                 | edf9319 | Parallel residuals (GPT-J, layers 7+) + WD=0.095. No effect vs v2 baseline ❌ |
 | v8      | 1.2045  | — (SKIP_QUANT) | 783            | —                 | 0bbe3b2 | Baseline rerun (no recurrence, no delayed diff). Clean reference. |
 | v10     | **1.2025** | — (SKIP_QUANT) | 769         | —                 | 9edddbe | **New best.** Delayed diffusion (25%–60% window). 765 steps. ✅ |
+| v11     | 1.2030  | — (SKIP_QUANT) | 774            | —                 |         | Diffusion 25%–75% window. Wider tail = 5 fewer steps, +0.0005 vs v10. ❌ |
 
 - **Val BPB**: raw validation bits-per-byte before quantization
 - **Post-Quant BPB**: after int6+brotli (sliding window)
