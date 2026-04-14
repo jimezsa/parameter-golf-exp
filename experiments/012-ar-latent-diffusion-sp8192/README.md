@@ -123,6 +123,7 @@ torchrun --standalone --nproc_per_node=8 experiments/012-ar-latent-diffusion-sp8
 | v2      | 1.2034  | 1.2169 (sw)    | 771            | 15,990,596 ✅     | 4baa4f0 | TARGET_MB=15.25 — aggressive pruning (42.7%) destroyed quant quality |
 | v3      | 1.2002  | 1.2161 (sw)    | 752            | 15,949,713 ✅     |         | Diffusion OFF ablation (TARGET_MB=15.95). -0.032 train BPB vs v2, but quant gap +0.016 |
 | v4      | 1.2140  | — (SKIP_QUANT) | 909            | —                 |         | Depth recurrence (layers 4-5, 1 extra pass). +16% step time → 103 fewer steps. Regression ❌ |
+| v5      | 1.2063  | — (SKIP_QUANT) | 786            | —                 |         | QK-gain 5.25 + warmdown 72%. Slight regression vs v2. Discarded ❌ |
 
 - **Val BPB**: raw validation bits-per-byte before quantization
 - **Post-Quant BPB**: after int6+brotli (sliding window)
@@ -144,6 +145,9 @@ Disabling diffusion saves ~29ms/step → 30 more training steps → raw BPB impr
 Same as v2 budget fix (decimal MB) but with diffusion disabled. Faster step time (752ms vs 771ms) gives 22 more steps (782 vs 760). Raw train BPB improves 0.003 (1.2002 vs 1.2034), but post-quant sw BPB is slightly worse than v1 baseline (1.2161 vs 1.2039). Quant degradation gap is 0.016 (vs 0.0003 for v1 with diffusion ON). Confirms latent MSE diffusion earns ~0.013 sw BPB for free as a quant regularizer. Artifact 15.95MB ✅.
 
 **Conclusion across v1–v3:** Latent diffusion ON + TARGET_MB=15.95 is the optimal config. v2's aggressive 15.25MB target destroys quant quality; v3 (diffusion OFF) loses the quant regularization benefit. Next iterations should keep diffusion ON and focus on architecture features (depth recurrence, parallel residuals, QK-gain, TTT).
+
+### v5 — QK-gain 5.25 + warmdown 72% (discarded)
+QK_GAIN_INIT=5.25 (was 5.0) + WARMDOWN_FRAC=0.72 (was 0.667). Zero overhead (786ms vs 783ms), but val_bpb regressed to 1.2063 (+0.0018 vs v2 baseline 1.2045). QK-gain effect may require depth recurrence to be active — all top-5 submissions use them together. Discarded.
 
 ## Status
 [x] Forked from exp 011 latent v3
