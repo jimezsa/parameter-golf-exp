@@ -14,8 +14,10 @@ from pathlib import Path
 import numpy as np
 import sentencepiece as spm
 import torch
+import torch._dynamo
 import torch.distributed as dist
 import torch.nn.functional as F
+torch._dynamo.config.cache_size_limit = 32
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from flash_attn_interface import flash_attn_func as flash_attn_3_func
