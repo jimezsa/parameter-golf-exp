@@ -26,6 +26,19 @@ The eval phase gets its own separate 10-minute budget (not counted against train
 - Pre-quant sw BPB: 1.2045 (1xH100)
 - Post-quant sw BPB: 1.2036 (1xH100, quant gap 0.0005)
 
+## File Convention
+
+The baseline `train_gpt.py` is **read-only** — never edited directly.
+Each version creates a new file forked from the best prior:
+
+- `train_gpt_v1.py` — forked from `train_gpt.py` (baseline)
+- `train_gpt_v2.py` — forked from best of v1 or baseline
+- `train_gpt_v3.py` — forked from best prior version
+- etc.
+
+This keeps diffs clean and rollback trivial. The autoresearch contract's
+`editable_file_path` updates per version.
+
 ## Run Config
 
 - **GPU**: 1x H100 (dev) / 8x H100 (final)
@@ -38,28 +51,30 @@ MATCHED_FINEWEB_REPO_ID=kevclark/parameter-golf python3 data/cached_challenge_fi
 python3 data/cached_challenge_fineweb.py --variant sp8192
 ```
 
-- Run (1x H100 dev):
+- Run (1x H100 dev, replace `_v1` with target version):
 
 ```bash
-RUN_ID=exp013_ar_latent_diffusion \
+RUN_ID=exp013_v1 \
 SEED=1337 \
-torchrun --standalone --nproc_per_node=1 experiments/013-ar-latent-diffusion/train_gpt.py
+torchrun --standalone --nproc_per_node=1 experiments/013-ar-latent-diffusion/train_gpt_v1.py
 ```
 
 - Run (8x H100 final):
 
 ```bash
-RUN_ID=exp013_ar_latent_diffusion \
+RUN_ID=exp013_vN \
 SEED=1337 \
-torchrun --standalone --nproc_per_node=8 experiments/013-ar-latent-diffusion/train_gpt.py
+torchrun --standalone --nproc_per_node=8 experiments/013-ar-latent-diffusion/train_gpt_vN.py
 ```
 
 ## Iteration Plan
 
-| Version | Focus                   | Description                                 |
-| ------- | ----------------------- | ------------------------------------------- |
-| v1      | AR self-gen calibration | Add 64-seq AR calibration during eval phase |
-| v2+     | Iteration               | Sweep calibration params, further tuning    |
+| Version | File                | Focus                   | Description                                                                                          |
+| ------- | ------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------- |
+| v1      | `train_gpt_v1.py`   | Fused Cross-Entropy     | Fork baseline, replace `F.cross_entropy()` with Liger Kernel fused CE — 10-20% loss-computation speedup |
+| v2      | `train_gpt_v2.py`   | Fused SwiGLU            | Fork best prior, swap LeakyReLU² for fused SwiGLU (Triton kernel) — activation change + fusion       |
+| v3      | `train_gpt_v3.py`   | AR self-gen calibration | Fork best prior, add 64-seq AR calibration during eval phase — primary quant-gap lever               |
+| v4+     | `train_gpt_v4+.py`  | Iteration               | Combine best of v1-v3, sweep calibration params, further tuning                                      |
 
 ## Iteration Results
 
@@ -70,6 +85,8 @@ torchrun --standalone --nproc_per_node=8 experiments/013-ar-latent-diffusion/tra
 ## Status
 
 - [x] Forked from exp 012
-- [ ] v1: AR self-gen calibration
+- [ ] v1: Fused cross-entropy (Liger Kernel)
+- [ ] v2: Fused SwiGLU (replaces LeakyReLU²)
+- [ ] v3: AR self-gen calibration
 - [ ] Iteration runs
 - [ ] Decision: adopt / discard / iterate
