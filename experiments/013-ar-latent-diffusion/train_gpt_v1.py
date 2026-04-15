@@ -885,12 +885,16 @@ class GPT(nn.Module):
         pred_latents = self.latent_proj(hidden_diff)
         return F.mse_loss(pred_latents.float(), target_latents.float(), reduction="mean")
 
+    @torch.compiler.disable
+    def _compute_main_loss(self, x_flat: Tensor, proj_weight: Tensor, targets: Tensor) -> Tensor:
+        return self._fused_ce(x_flat, proj_weight, targets)
+
     def forward(self, input_ids: Tensor, target_ids: Tensor, run_aux_diffusion: bool = False) -> Tensor:
         x = self._forward_hidden(input_ids)
         x_flat = x.reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
         proj_weight = self.tok_emb.weight if self.tie_embeddings else self.lm_head.weight
-        main_loss = self._fused_ce(x_flat, proj_weight, targets)
+        main_loss = self._compute_main_loss(x_flat, proj_weight, targets)
         if self.training and run_aux_diffusion and self.diffusion_loss_weight > 0.0:
             main_loss = main_loss + self.diffusion_loss_weight * self._diffusion_loss(input_ids, target_ids, self.diffusion_subsample_frac)
         return main_loss
