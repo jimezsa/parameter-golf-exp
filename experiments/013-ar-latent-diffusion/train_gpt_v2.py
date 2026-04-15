@@ -89,11 +89,6 @@ class Hyperparameters:
     gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 32))
     gptq_block_size = int(os.environ.get("GPTQ_BLOCK_SIZE", 128))
     gptq_reserve_seconds = float(os.environ.get("GPTQ_RESERVE_SECONDS", 12.0))
-    # AR self-gen calibration
-    selfgen_calib_seqs = int(os.environ.get("SELFGEN_CALIB_SEQS", 64))
-    selfgen_seq_len = int(os.environ.get("SELFGEN_SEQ_LEN", 512))
-    selfgen_batch_size = int(os.environ.get("SELFGEN_BATCH_SIZE", 8))
-    selfgen_temperature = float(os.environ.get("SELFGEN_TEMPERATURE", 0.8))
     matrix_bits = int(os.environ.get("MATRIX_BITS", 6))
     embed_bits = int(os.environ.get("EMBED_BITS", 8))
     matrix_clip_sigmas = float(os.environ.get("MATRIX_CLIP_SIGMAS", 12.85))
@@ -627,9 +622,11 @@ class MLP(nn.Module):
     def __init__(self, dim: int, mlp_mult: int):
         super().__init__()
         # No CastedLinear -- weights come from banks
-    def forward(self, x: Tensor, up_w: Tensor, down_w: Tensor) -> Tensor:
-        x = F.leaky_relu(F.linear(x, up_w.to(x.dtype)), negative_slope=0.5)
-        return F.linear(x.square(), down_w.to(x.dtype))
+        # SwiGLU: gate_up_w is (2*hidden, dim), down_w is (dim, hidden)
+    def forward(self, x: Tensor, gate_up_w: Tensor, down_w: Tensor) -> Tensor:
+        gate_up = F.linear(x, gate_up_w.to(x.dtype))
+        gate, up = gate_up.chunk(2, dim=-1)
+        return F.linear(F.silu(gate) * up, down_w.to(x.dtype))
 
 class Block(nn.Module):
     def __init__(
@@ -663,7 +660,7 @@ class Block(nn.Module):
         k_w: Tensor,
         v_w: Tensor,
         out_w: Tensor,
-        up_w: Tensor,
+        gate_up_w: Tensor,
         down_w: Tensor,
         is_causal: bool = True,
         t_emb: Tensor | None = None,
@@ -679,11 +676,11 @@ class Block(nn.Module):
         )
         attn_contrib = self.attn_scale.to(dtype=x_in.dtype)[None, None, :] * attn_out
         if self.parallel:
-            mlp_contrib = self.mlp_scale.to(dtype=x_in.dtype)[None, None, :] * self.mlp(self.mlp_norm(x_in) * self.ln_scale_factor, up_w, down_w)
+            mlp_contrib = self.mlp_scale.to(dtype=x_in.dtype)[None, None, :] * self.mlp(self.mlp_norm(x_in) * self.ln_scale_factor, gate_up_w, down_w)
             x_out = x_in + attn_contrib + mlp_contrib
         else:
             x_out = x_in + attn_contrib
-            x_out = x_out + self.mlp_scale.to(dtype=x_out.dtype)[None, None, :] * self.mlp(self.mlp_norm(x_out) * self.ln_scale_factor, up_w, down_w)
+            x_out = x_out + self.mlp_scale.to(dtype=x_out.dtype)[None, None, :] * self.mlp(self.mlp_norm(x_out) * self.ln_scale_factor, gate_up_w, down_w)
         return x_out
 
 
@@ -758,12 +755,15 @@ class GPT(nn.Module):
         )
         head_dim = model_dim // num_heads
         kv_dim = num_kv_heads * head_dim
-        mlp_dim = int(mlp_mult * model_dim)
+        # SwiGLU: hidden dim = 2/3 of original mlp_dim, rounded to nearest 64 for GPU alignment
+        raw_mlp_dim = int(mlp_mult * model_dim)
+        swiglu_dim = ((raw_mlp_dim * 2 // 3 + 63) // 64) * 64  # 1344 for dim=512, mult=4
+        self.swiglu_dim = swiglu_dim
         self.num_layers = num_layers
         self.qo_bank = nn.Parameter(torch.empty(2 * num_layers, model_dim, model_dim))
         self.kv_bank = nn.Parameter(torch.empty(2 * num_layers, kv_dim, model_dim))
-        self.mlp_up_bank = nn.Parameter(torch.empty(num_layers, mlp_dim, model_dim))
-        self.mlp_down_bank = nn.Parameter(torch.empty(num_layers, model_dim, mlp_dim))
+        self.mlp_gate_up_bank = nn.Parameter(torch.empty(num_layers, 2 * swiglu_dim, model_dim))
+        self.mlp_down_bank = nn.Parameter(torch.empty(num_layers, model_dim, swiglu_dim))
         self.blocks = nn.ModuleList(
             [
                 Block(
@@ -798,7 +798,11 @@ class GPT(nn.Module):
             nn.init.zeros_(self.qo_bank.data[n + i])
             nn.init.orthogonal_(self.kv_bank.data[i], gain=1.0)
             nn.init.orthogonal_(self.kv_bank.data[n + i], gain=1.0)
-            nn.init.orthogonal_(self.mlp_up_bank.data[i], gain=1.0)
+            # SwiGLU: init gate and up halves of combined bank separately
+            gate_part = self.mlp_gate_up_bank.data[i][:self.swiglu_dim]
+            up_part = self.mlp_gate_up_bank.data[i][self.swiglu_dim:]
+            nn.init.orthogonal_(gate_part, gain=1.0)
+            nn.init.orthogonal_(up_part, gain=1.0)
             nn.init.zeros_(self.mlp_down_bank.data[i])
             self.qo_bank.data[n + i].mul_(proj_scale)
             self.mlp_down_bank.data[i].mul_(proj_scale)
@@ -820,7 +824,7 @@ class GPT(nn.Module):
         n = self.num_layers
         return self.blocks[layer_idx](x, x0,
             self.qo_bank[layer_idx], self.kv_bank[layer_idx], self.kv_bank[n + layer_idx],
-            self.qo_bank[n + layer_idx], self.mlp_up_bank[layer_idx], self.mlp_down_bank[layer_idx],
+            self.qo_bank[n + layer_idx], self.mlp_gate_up_bank[layer_idx], self.mlp_down_bank[layer_idx],
             is_causal=is_causal, t_emb=t_emb)
 
     def _forward_hidden(
@@ -1066,9 +1070,11 @@ def _unbank_state_dict(sd: dict[str, Tensor], num_layers: int) -> dict[str, Tens
             for i in range(n):
                 out[f"blocks.{i}.attn.c_k.weight"] = tensor[i]
                 out[f"blocks.{i}.attn.c_v.weight"] = tensor[n + i]
-        elif name == "mlp_up_bank":
+        elif name == "mlp_gate_up_bank":
+            half = tensor.shape[1] // 2
             for i in range(n):
-                out[f"blocks.{i}.mlp.fc.weight"] = tensor[i]
+                out[f"blocks.{i}.mlp.gate.weight"] = tensor[i][:half]
+                out[f"blocks.{i}.mlp.fc.weight"] = tensor[i][half:]
         elif name == "mlp_down_bank":
             for i in range(n):
                 out[f"blocks.{i}.mlp.proj.weight"] = tensor[i]
@@ -1083,6 +1089,7 @@ def _rebank_state_dict(sd: dict[str, Tensor], num_layers: int, template_sd: dict
     # Reconstruct banks from individual weight keys
     qo_slices = [None] * (2 * n)
     kv_slices = [None] * (2 * n)
+    gate_slices = [None] * n
     up_slices = [None] * n
     down_slices = [None] * n
     consumed = set()
@@ -1103,6 +1110,10 @@ def _rebank_state_dict(sd: dict[str, Tensor], num_layers: int, template_sd: dict
         if vk in sd:
             kv_slices[n + i] = sd[vk]
             consumed.add(vk)
+        gk = f"blocks.{i}.mlp.gate.weight"
+        if gk in sd:
+            gate_slices[i] = sd[gk]
+            consumed.add(gk)
         fk = f"blocks.{i}.mlp.fc.weight"
         if fk in sd:
             up_slices[i] = sd[fk]
@@ -1113,7 +1124,9 @@ def _rebank_state_dict(sd: dict[str, Tensor], num_layers: int, template_sd: dict
             consumed.add(dk)
     out["qo_bank"] = torch.stack(qo_slices).to(dtype=template_sd["qo_bank"].dtype)
     out["kv_bank"] = torch.stack(kv_slices).to(dtype=template_sd["kv_bank"].dtype)
-    out["mlp_up_bank"] = torch.stack(up_slices).to(dtype=template_sd["mlp_up_bank"].dtype)
+    # Recombine gate + up into mlp_gate_up_bank
+    gate_up_slices = [torch.cat([g, u], dim=0) for g, u in zip(gate_slices, up_slices)]
+    out["mlp_gate_up_bank"] = torch.stack(gate_up_slices).to(dtype=template_sd["mlp_gate_up_bank"].dtype)
     out["mlp_down_bank"] = torch.stack(down_slices).to(dtype=template_sd["mlp_down_bank"].dtype)
     for name, tensor in sd.items():
         if name not in consumed:
@@ -1161,13 +1174,15 @@ class _HessianAttn(nn.Module):
         return self.proj(y.reshape(bsz, seqlen, dim))
 
 class _HessianMLP(nn.Module):
-    """Non-banked MLP with CastedLinear layers for Hessian hooks."""
+    """Non-banked SwiGLU MLP with CastedLinear layers for Hessian hooks."""
     def __init__(self, dim, mlp_mult):
         super().__init__()
-        self.fc = CastedLinear(dim, int(mlp_mult * dim), bias=False)
-        self.proj = CastedLinear(int(mlp_mult * dim), dim, bias=False)
+        swiglu_dim = ((int(mlp_mult * dim) * 2 // 3 + 63) // 64) * 64
+        self.gate = CastedLinear(dim, swiglu_dim, bias=False)
+        self.fc = CastedLinear(dim, swiglu_dim, bias=False)
+        self.proj = CastedLinear(swiglu_dim, dim, bias=False)
     def forward(self, x):
-        return self.proj(F.leaky_relu(self.fc(x), negative_slope=0.5).square())
+        return self.proj(F.silu(self.gate(x)) * self.fc(x))
 
 class _HessianBlock(nn.Module):
     def __init__(self, dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init, train_seq_len, layer_idx=0, ln_scale=False, parallel=False):
@@ -1302,62 +1317,6 @@ def collect_hessians(hessian_model, train_loader, args, device, grad_accum_steps
         H += damp * torch.eye(H.shape[0])
         hessians[name] = H
     hessian_model.train()
-    return hessians
-
-def generate_autoregressive_calib(model, device, args, num_seqs=64, seq_len=512,
-                                   temperature=0.8, batch_size=8, seed=42):
-    """Generate sequences autoregressively from the model for GPTQ calibration.
-    Uses the model's own output distribution instead of training data."""
-    model.eval()
-    rng = torch.Generator(device=device)
-    rng.manual_seed(seed)
-    all_tokens = []
-    with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-        for batch_start in range(0, num_seqs, batch_size):
-            bs = min(batch_size, num_seqs - batch_start)
-            tokens = torch.randint(0, args.vocab_size, (bs, 1), device=device, generator=rng)
-            for pos in range(seq_len - 1):
-                logits = model.forward_logits(tokens)
-                next_logit = logits[:, -1, :]
-                probs = torch.softmax(next_logit / temperature, dim=-1)
-                next_tok = torch.multinomial(probs, 1, generator=rng)
-                tokens = torch.cat([tokens, next_tok], dim=1)
-            all_tokens.extend(tokens[i:i+1] for i in range(bs))
-    return all_tokens
-
-def collect_hessians_from_tokens(hessian_model, token_seqs, device):
-    """Collect H = X^T X from AR-generated token sequences for GPTQ calibration."""
-    hessians = {}
-    hooks = []
-    for name, module in hessian_model.named_modules():
-        if isinstance(module, CastedLinear):
-            param_name = name + ".weight"
-            cols = module.weight.shape[1]
-            hessians[param_name] = torch.zeros(cols, cols, dtype=torch.float32, device='cpu')
-            def make_hook(pname):
-                def hook_fn(module, input, output):
-                    x = input[0].detach().float()
-                    if x.ndim == 3:
-                        x = x.reshape(-1, x.shape[-1])
-                    hessians[pname] += (x.T @ x).cpu()
-                return hook_fn
-            h = module.register_forward_hook(make_hook(param_name))
-            hooks.append(h)
-    hessian_model.eval()
-    with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-        for seq in token_seqs:
-            x = seq[:, :-1].to(device)
-            y = seq[:, 1:].to(device)
-            hessian_model(x, y)
-    for h in hooks:
-        h.remove()
-    num_batches = len(token_seqs)
-    for name in hessians:
-        H = hessians[name]
-        H /= num_batches
-        damp = 0.01 * torch.diag(H).mean().clamp_min(1e-6)
-        H += damp * torch.eye(H.shape[0])
-        hessians[name] = H
     return hessians
 
 def mixed_quantize_int6(state_dict: dict[str, Tensor], args: Hyperparameters, hessians: dict[str, Tensor]):
@@ -1577,7 +1536,7 @@ def main() -> None:
     # Banks stay FP32 (like CastedLinear weights), cast to BF16 in forward
     base_model.qo_bank.data = base_model.qo_bank.data.float()
     base_model.kv_bank.data = base_model.kv_bank.data.float()
-    base_model.mlp_up_bank.data = base_model.mlp_up_bank.data.float()
+    base_model.mlp_gate_up_bank.data = base_model.mlp_gate_up_bank.data.float()
     base_model.mlp_down_bank.data = base_model.mlp_down_bank.data.float()
     for module in base_model.modules():
         if isinstance(module, CastedLinear):
@@ -1590,7 +1549,7 @@ def main() -> None:
 
     matrix_params = [
         base_model.qo_bank, base_model.kv_bank,
-        base_model.mlp_up_bank, base_model.mlp_down_bank,
+        base_model.mlp_gate_up_bank, base_model.mlp_down_bank,
     ]
     block_named_params = list(base_model.blocks.named_parameters())
     scalar_params = [
@@ -1931,22 +1890,16 @@ def main() -> None:
         {k: v.to(device) for k, v in unbanked_sd.items() if k in hessian_model.state_dict()},
         strict=False,
     )
-    # AR self-gen calibration: generate sequences from the trained model
-    log0(f"gptq:generating {args.selfgen_calib_seqs} AR calibration sequences (len={args.selfgen_seq_len}, temp={args.selfgen_temperature})...")
-    t_selfgen = time.perf_counter()
-    calib_tokens = generate_autoregressive_calib(
-        base_model, device, args,
-        num_seqs=args.selfgen_calib_seqs,
-        seq_len=args.selfgen_seq_len,
-        temperature=args.selfgen_temperature,
-        batch_size=args.selfgen_batch_size,
-        seed=args.seed,
+    log0(f"gptq:collecting hessians from {args.gptq_calib_batches} calibration batches...")
+    calib_loader = ShuffledSequenceLoader(args, rank, world_size, device)
+    hessians = collect_hessians(
+        hessian_model,
+        calib_loader,
+        args,
+        device,
+        grad_accum_steps,
+        num_batches=args.gptq_calib_batches,
     )
-    log0(f"gptq:generated {len(calib_tokens)} sequences in {time.perf_counter() - t_selfgen:.1f}s")
-    # Collect Hessians from AR-generated sequences
-    log0(f"gptq:collecting hessians from AR self-gen calibration data...")
-    hessians = collect_hessians_from_tokens(hessian_model, calib_tokens, device)
-    del calib_tokens
     log0(f"gptq:collected hessians for {len(hessians)} layers")
     del hessian_model
     torch.cuda.empty_cache()
@@ -2037,7 +1990,7 @@ def main() -> None:
     ).to(device).bfloat16()
     eval_model.qo_bank.data = eval_model.qo_bank.data.float()
     eval_model.kv_bank.data = eval_model.kv_bank.data.float()
-    eval_model.mlp_up_bank.data = eval_model.mlp_up_bank.data.float()
+    eval_model.mlp_gate_up_bank.data = eval_model.mlp_gate_up_bank.data.float()
     eval_model.mlp_down_bank.data = eval_model.mlp_down_bank.data.float()
     for m in eval_model.modules():
         if isinstance(m, CastedLinear):

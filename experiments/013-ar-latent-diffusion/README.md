@@ -72,7 +72,7 @@ torchrun --standalone --nproc_per_node=8 experiments/013-ar-latent-diffusion/tra
 | Version | File                | Focus                   | Description                                                                                          |
 | ------- | ------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------- |
 | v1      | `train_gpt_v1.py`   | Fused Cross-Entropy     | Fork baseline, replace `F.cross_entropy()` with Liger Kernel fused CE — 10-20% loss-computation speedup |
-| v2      | `train_gpt_v2.py`   | AR Self-Gen Calibration | Add AR self-gen calibration (64 seqs) for GPTQ — untested with quant, pre-quant matches baseline |
+| v2      | `train_gpt_v2.py`   | SwiGELU Activation      | Replace LeakyReLU² with SwiGELU — potentially better gradient flow and expressiveness |
 | v3      | `train_gpt_v3.py`   | Delayed Diffusion Start | Port delayed diffusion window (25%–60%) from exp 012 v10 — proven +0.002 BPB win |
 
 ## Iteration Results
@@ -81,7 +81,6 @@ torchrun --standalone --nproc_per_node=8 experiments/013-ar-latent-diffusion/tra
 | --------- | ------- | -------------- | -------------- | ---------------- | ------ | ----------- |
 | baseline  | 1.2035  | —              | 778            | —                | 069e7d5 | Exp 012 latent v3 baseline rerun (no quant), confirms reference |
 | v1        | 1.2072  | —              | 805            | —                | —       | Liger fused CE — disabled due to torch.compile conflict, +0.003 regression |
-| v2        | 1.2034  | —              | 779            | —                | —       | AR self-gen calibration (64 seq), pre-quant only — matches baseline, quant killed mid-prune |
 
 ## Status
 
