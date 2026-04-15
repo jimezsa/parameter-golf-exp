@@ -755,9 +755,9 @@ class GPT(nn.Module):
         )
         head_dim = model_dim // num_heads
         kv_dim = num_kv_heads * head_dim
-        # SwiGLU: hidden dim = 2/3 of original mlp_dim, rounded to nearest 64 for GPU alignment
+        # SwiGLU: same hidden dim as LeakyReLU² (no 2/3 reduction)
         raw_mlp_dim = int(mlp_mult * model_dim)
-        swiglu_dim = ((raw_mlp_dim * 2 // 3 + 63) // 64) * 64  # 1344 for dim=512, mult=4
+        swiglu_dim = ((raw_mlp_dim + 63) // 64) * 64  # 2048 for dim=512, mult=4
         self.swiglu_dim = swiglu_dim
         self.num_layers = num_layers
         self.qo_bank = nn.Parameter(torch.empty(2 * num_layers, model_dim, model_dim))
@@ -1177,7 +1177,7 @@ class _HessianMLP(nn.Module):
     """Non-banked SwiGLU MLP with CastedLinear layers for Hessian hooks."""
     def __init__(self, dim, mlp_mult):
         super().__init__()
-        swiglu_dim = ((int(mlp_mult * dim) * 2 // 3 + 63) // 64) * 64
+        swiglu_dim = ((int(mlp_mult * dim) + 63) // 64) * 64
         self.gate = CastedLinear(dim, swiglu_dim, bias=False)
         self.fc = CastedLinear(dim, swiglu_dim, bias=False)
         self.proj = CastedLinear(swiglu_dim, dim, bias=False)
