@@ -77,7 +77,9 @@ torchrun --standalone --nproc_per_node=8 experiments/013-ar-latent-diffusion/tra
 
 | Version   | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact (bytes) | Commit | Description |
 | --------- | ------- | -------------- | -------------- | ---------------- | ------ | ----------- |
-| (pending) |         |                |                |                  |        |             |
+| baseline  | 1.2035  | —              | 778            | —                | 069e7d5 | Exp 012 latent v3 baseline rerun (no quant), confirms reference |
+| v1        | 1.2072  | —              | 805            | —                | —       | Liger fused CE — disabled due to torch.compile conflict, +0.003 regression |
+| v2        | 1.2034  | —              | 779            | —                | —       | AR self-gen calibration (64 seq), pre-quant only — matches baseline, quant killed mid-prune |
 
 ## Status
 
