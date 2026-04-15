@@ -19,7 +19,11 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from flash_attn_interface import flash_attn_func as flash_attn_3_func
-from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
+try:
+    from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
+    _LIGER_FUSED_CE = True
+except ImportError:
+    _LIGER_FUSED_CE = False
 
 class Hyperparameters:
     data_path = os.environ.get("DATA_PATH", "./data/datasets/fineweb10B_sp8192")
@@ -717,7 +721,7 @@ class GPT(nn.Module):
         self.tie_embeddings = tie_embeddings
         self.tied_embed_init_std = tied_embed_init_std
         self.logit_softcap = logit_softcap
-        self._fused_ce = LigerFusedLinearCrossEntropyLoss(softcap=logit_softcap)
+        self._fused_ce = LigerFusedLinearCrossEntropyLoss(softcap=logit_softcap) if _LIGER_FUSED_CE else None
         self.diffusion_loss_weight = diffusion_loss_weight
         self.diffusion_aux_prob = diffusion_aux_prob
         self.diffusion_subsample_frac = diffusion_subsample_frac
@@ -885,16 +889,16 @@ class GPT(nn.Module):
         pred_latents = self.latent_proj(hidden_diff)
         return F.mse_loss(pred_latents.float(), target_latents.float(), reduction="mean")
 
-    @torch.compiler.disable
-    def _compute_main_loss(self, x_flat: Tensor, proj_weight: Tensor, targets: Tensor) -> Tensor:
-        return self._fused_ce(x_flat, proj_weight, targets)
-
     def forward(self, input_ids: Tensor, target_ids: Tensor, run_aux_diffusion: bool = False) -> Tensor:
         x = self._forward_hidden(input_ids)
         x_flat = x.reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
-        proj_weight = self.tok_emb.weight if self.tie_embeddings else self.lm_head.weight
-        main_loss = self._compute_main_loss(x_flat, proj_weight, targets)
+        if self._fused_ce is not None:
+            proj_weight = self.tok_emb.weight if self.tie_embeddings else self.lm_head.weight
+            main_loss = self._fused_ce(x_flat, proj_weight, targets)
+        else:
+            logits = self._project_logits(x_flat)
+            main_loss = F.cross_entropy(logits.float(), targets, reduction="mean")
         if self.training and run_aux_diffusion and self.diffusion_loss_weight > 0.0:
             main_loss = main_loss + self.diffusion_loss_weight * self._diffusion_loss(input_ids, target_ids, self.diffusion_subsample_frac)
         return main_loss
@@ -1520,7 +1524,7 @@ def main() -> None:
     restore_low_dim_params_to_fp32(base_model)
     # No DDP -- Parallel Muon handles bank grad communication via reduce-scatter,
     # and non-bank grads are manually all-reduced before Adam steps.
-    compiled_model = torch.compile(base_model, dynamic=False, fullgraph=False)  # fullgraph=False for Liger fused CE autograd
+    compiled_model = torch.compile(base_model, dynamic=False, fullgraph=True)
     model = compiled_model
 
     matrix_params = [
