@@ -21,7 +21,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from flash_attn_interface import flash_attn_func as flash_attn_3_func
 try:
     from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
-    _LIGER_FUSED_CE = True
+    _LIGER_FUSED_CE = False  # disabled: .item() in Liger breaks torch.compile
 except ImportError:
     _LIGER_FUSED_CE = False
 
