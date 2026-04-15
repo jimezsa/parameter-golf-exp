@@ -19,11 +19,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from flash_attn_interface import flash_attn_func as flash_attn_3_func
-try:
-    from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
-    _LIGER_FUSED_CE = True
-except ImportError:
-    _LIGER_FUSED_CE = False
+_LIGER_FUSED_CE = False  # Liger fused CE causes 74% step time regression under torch.compile fullgraph=True
 
 class Hyperparameters:
     data_path = os.environ.get("DATA_PATH", "./data/datasets/fineweb10B_sp8192")
