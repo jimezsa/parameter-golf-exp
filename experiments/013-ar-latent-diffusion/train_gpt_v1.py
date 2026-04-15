@@ -19,12 +19,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from flash_attn_interface import flash_attn_func as flash_attn_3_func
-from liger_kernel.ops.cross_entropy import LigerCrossEntropyFunction
-
-@torch.compiler.disable
-def _liger_ce(logits, targets, reduction="mean"):
-    result = LigerCrossEntropyFunction.apply(logits, targets, None, -100, 0.0, 0.0, reduction, None, False)
-    return result[0] if isinstance(result, tuple) else result
+from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
 
 class Hyperparameters:
     data_path = os.environ.get("DATA_PATH", "./data/datasets/fineweb10B_sp8192")
@@ -722,6 +717,7 @@ class GPT(nn.Module):
         self.tie_embeddings = tie_embeddings
         self.tied_embed_init_std = tied_embed_init_std
         self.logit_softcap = logit_softcap
+        self._fused_ce = LigerFusedLinearCrossEntropyLoss(softcap=logit_softcap)
         self.diffusion_loss_weight = diffusion_loss_weight
         self.diffusion_aux_prob = diffusion_aux_prob
         self.diffusion_subsample_frac = diffusion_subsample_frac
@@ -893,8 +889,8 @@ class GPT(nn.Module):
         x = self._forward_hidden(input_ids)
         x_flat = x.reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
-        logits = self._project_logits(x_flat)
-        main_loss = _liger_ce(logits, targets)
+        proj_weight = self.tok_emb.weight if self.tie_embeddings else self.lm_head.weight
+        main_loss = self._fused_ce(x_flat, proj_weight, targets)
         if self.training and run_aux_diffusion and self.diffusion_loss_weight > 0.0:
             main_loss = main_loss + self.diffusion_loss_weight * self._diffusion_loss(input_ids, target_ids, self.diffusion_subsample_frac)
         return main_loss
@@ -948,10 +944,10 @@ def eval_val_sliding(
                 y_batch[i, :wlen] = chunk[1:]
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 logits = compiled_logits(x_batch)
-            nll = _liger_ce(
-                logits.reshape(-1, logits.size(-1)),
+            nll = F.cross_entropy(
+                logits.reshape(-1, logits.size(-1)).float(),
                 y_batch.reshape(-1),
-                "none",
+                reduction="none",
             ).reshape(bsz, seq_len)
             for i, ws in enumerate(batch_ws):
                 wlen = wlens[i]
@@ -1259,7 +1255,7 @@ class _HessianGPT(nn.Module):
         targets = target_ids.reshape(-1)
         logits_proj = F.linear(x_flat, self.tok_emb.weight) if self.tie_embeddings else self.lm_head(x_flat)
         logits = self.logit_softcap * torch.tanh(logits_proj / self.logit_softcap)
-        return _liger_ce(logits, targets)
+        return F.cross_entropy(logits.float(), targets, reduction="mean")
 
 def collect_hessians(hessian_model, train_loader, args, device, grad_accum_steps, num_batches=256):
     """Run calibration batches through a non-banked model, collecting H = X^T X for each CastedLinear."""
@@ -1520,7 +1516,7 @@ def main() -> None:
     restore_low_dim_params_to_fp32(base_model)
     # No DDP -- Parallel Muon handles bank grad communication via reduce-scatter,
     # and non-bank grads are manually all-reduced before Adam steps.
-    compiled_model = torch.compile(base_model, dynamic=False, fullgraph=False)
+    compiled_model = torch.compile(base_model, dynamic=False, fullgraph=False)  # fullgraph=False for Liger fused CE autograd
     model = compiled_model
 
     matrix_params = [
@@ -1973,7 +1969,7 @@ def main() -> None:
             m.float()
     restore_low_dim_params_to_fp32(eval_model)
     eval_model.load_state_dict(deq_state, strict=True)
-    compiled_eval = torch.compile(eval_model, dynamic=False, fullgraph=False)
+    compiled_eval = torch.compile(eval_model, dynamic=False, fullgraph=True)
     torch.cuda.synchronize()
     t_qeval = time.perf_counter()
     q_val_loss, q_val_bpb = eval_val(
