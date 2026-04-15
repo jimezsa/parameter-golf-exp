@@ -1786,12 +1786,12 @@ def main() -> None:
         approx_training_time_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
         if args.swa_enabled and scale < 0.2 and step % args.swa_every == 0:
             if swa_state is None:
-                swa_state = {name: t.detach().cpu().clone() for name, t in base_model.state_dict().items()}
+                swa_state = {name: t.detach().cpu().float() for name, t in base_model.state_dict().items()}
                 swa_count = 1
                 log0(f"swa:start step:{step}")
             else:
                 for name, t in base_model.state_dict().items():
-                    swa_state[name] += t.detach().cpu()
+                    swa_state[name] += t.detach().cpu().float()
                 swa_count += 1
         should_log_train = (
             args.train_log_every > 0
@@ -1813,6 +1813,15 @@ def main() -> None:
         f"peak memory allocated: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB "
         f"reserved: {torch.cuda.max_memory_reserved() // 1024 // 1024} MiB"
     )
+    # Apply SWA if accumulated (average collected snapshots → base_model)
+    if swa_state is not None and swa_count > 0:
+        log0(f"swa:applying avg of {swa_count} snapshots")
+        orig_sd = base_model.state_dict()
+        avg_sd = {}
+        for name, t in swa_state.items():
+            avg_sd[name] = (t / swa_count).to(orig_sd[name].dtype).to(orig_sd[name].device)
+        base_model.load_state_dict(avg_sd, strict=True)
+        del swa_state, avg_sd
     torch.cuda.synchronize()
     t_diag = time.perf_counter()
     diag_val_loss, diag_val_bpb = eval_val(
