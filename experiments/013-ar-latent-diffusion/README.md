@@ -72,9 +72,6 @@ torchrun --standalone --nproc_per_node=8 experiments/013-ar-latent-diffusion/tra
 | Version | File                | Focus                   | Description                                                                                          |
 | ------- | ------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------- |
 | v1      | `train_gpt_v1.py`   | Fused Cross-Entropy     | Fork baseline, replace `F.cross_entropy()` with Liger Kernel fused CE — 10-20% loss-computation speedup |
-| v2      | `train_gpt_v2.py`   | Fused SwiGLU            | Fork best prior, swap LeakyReLU² for fused SwiGLU (Triton kernel) — activation change + fusion       |
-| v3      | `train_gpt_v3.py`   | AR self-gen calibration | Fork best prior, add 64-seq AR calibration during eval phase — primary quant-gap lever               |
-| v4+     | `train_gpt_v4+.py`  | Iteration               | Combine best of v1-v3, sweep calibration params, further tuning                                      |
 
 ## Iteration Results
 
@@ -86,7 +83,5 @@ torchrun --standalone --nproc_per_node=8 experiments/013-ar-latent-diffusion/tra
 
 - [x] Forked from exp 012
 - [ ] v1: Fused cross-entropy (Liger Kernel)
-- [ ] v2: Fused SwiGLU (replaces LeakyReLU²)
-- [ ] v3: AR self-gen calibration
 - [ ] Iteration runs
 - [ ] Decision: adopt / discard / iterate
