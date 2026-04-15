@@ -78,6 +78,8 @@ class Hyperparameters:
     qat_enabled = bool(int(os.environ.get("QAT_ENABLED", "0")))
     xsa_last_n = int(os.environ.get("XSA_LAST_N", 11))  # XSA on ALL layers (our novel contribution)
     rope_dims = int(os.environ.get("ROPE_DIMS", 16))
+    swigelu = bool(int(os.environ.get("SWIGELU", "0")))
+    swigelu_hidden_dim = int(os.environ.get("SWIGELU_HIDDEN_DIM", 1344))
     ln_scale = bool(int(os.environ.get("LN_SCALE", "1")))
     late_qat_threshold = float(os.environ.get("LATE_QAT_THRESHOLD", 0.15))
     skip_gates_enabled = bool(int(os.environ.get("SKIP_GATES_ENABLED", "1")))
@@ -619,10 +621,15 @@ class CausalSelfAttention(nn.Module):
         return F.linear(y, out_w.to(x.dtype))
 
 class MLP(nn.Module):
-    def __init__(self, dim: int, mlp_mult: int):
+    def __init__(self, dim: int, mlp_mult: int, swigelu: bool = False):
         super().__init__()
-        # No CastedLinear -- weights come from banks
+        self.swigelu = swigelu
     def forward(self, x: Tensor, up_w: Tensor, down_w: Tensor) -> Tensor:
+        if self.swigelu:
+            half = up_w.shape[0] // 2
+            gate_w = up_w[:half]
+            up_w_real = up_w[half:]
+            return F.linear(F.silu(F.linear(x, gate_w.to(x.dtype))) * F.linear(x, up_w_real.to(x.dtype)), down_w.to(x.dtype))
         x = F.leaky_relu(F.linear(x, up_w.to(x.dtype)), negative_slope=0.5)
         return F.linear(x.square(), down_w.to(x.dtype))
 
@@ -639,13 +646,14 @@ class Block(nn.Module):
         layer_idx: int = 0,
         ln_scale: bool = False,
         parallel: bool = False,
+        swigelu: bool = False,
     ):
         super().__init__()
         self.parallel = parallel
         self.attn_norm = RMSNorm()
         self.mlp_norm = RMSNorm()
         self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base, qk_gain_init, train_seq_len)
-        self.mlp = MLP(dim, mlp_mult)
+        self.mlp = MLP(dim, mlp_mult, swigelu=swigelu)
         self.attn_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
         self.mlp_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
         self.resid_mix = nn.Parameter(torch.stack((torch.ones(dim), torch.zeros(dim))).float())
@@ -709,9 +717,12 @@ class GPT(nn.Module):
         recurrence_start: int = 3,
         recurrence_end: int = 5,
         weight_share: bool = False,
+        swigelu: bool = False,
+        swigelu_hidden_dim: int = 1344,
     ):
         super().__init__()
         self.weight_share = weight_share
+        self.swigelu = swigelu
         if logit_softcap <= 0.0:
             raise ValueError(f"logit_softcap must be positive, got {logit_softcap}")
         if not 0.0 <= diffusion_aux_prob <= 1.0:
@@ -754,17 +765,24 @@ class GPT(nn.Module):
         head_dim = model_dim // num_heads
         kv_dim = num_kv_heads * head_dim
         mlp_dim = int(mlp_mult * model_dim)
+        if swigelu:
+            mlp_up_dim = 2 * swigelu_hidden_dim  # packed gate + up
+            mlp_down_dim = swigelu_hidden_dim
+        else:
+            mlp_up_dim = mlp_dim
+            mlp_down_dim = mlp_dim
         self.num_layers = num_layers
         self.qo_bank = nn.Parameter(torch.empty(2 * num_layers, model_dim, model_dim))
         self.kv_bank = nn.Parameter(torch.empty(2 * num_layers, kv_dim, model_dim))
-        self.mlp_up_bank = nn.Parameter(torch.empty(num_layers, mlp_dim, model_dim))
-        self.mlp_down_bank = nn.Parameter(torch.empty(num_layers, model_dim, mlp_dim))
+        self.mlp_up_bank = nn.Parameter(torch.empty(num_layers, mlp_up_dim, model_dim))
+        self.mlp_down_bank = nn.Parameter(torch.empty(num_layers, model_dim, mlp_down_dim))
         self.blocks = nn.ModuleList(
             [
                 Block(
                     model_dim, num_heads, num_kv_heads, mlp_mult, rope_base,
                     qk_gain_init, train_seq_len, layer_idx=i, ln_scale=ln_scale,
                     parallel=(i >= parallel_start_layer),
+                    swigelu=swigelu,
                 )
                 for i in range(num_layers)
             ]
@@ -1198,7 +1216,8 @@ class _HessianGPT(nn.Module):
                  skip_gates_enabled=True,
                  parallel_start_layer=999,
                  recurrence_depth=1, recurrence_start=3, recurrence_end=5,
-                 weight_share=False):
+                 weight_share=False,
+                 swigelu=False, swigelu_hidden_dim=1344):
         super().__init__()
         self.tie_embeddings = tie_embeddings
         self.logit_softcap = logit_softcap
@@ -1512,6 +1531,8 @@ def main() -> None:
         recurrence_start=args.recurrence_start,
         recurrence_end=args.recurrence_end,
         weight_share=args.weight_share,
+        swigelu=args.swigelu,
+        swigelu_hidden_dim=args.swigelu_hidden_dim,
     ).to(device).bfloat16()
     # Banks stay FP32 (like CastedLinear weights), cast to BF16 in forward
     base_model.qo_bank.data = base_model.qo_bank.data.float()
@@ -1860,6 +1881,8 @@ def main() -> None:
         recurrence_start=args.recurrence_start,
         recurrence_end=args.recurrence_end,
         weight_share=args.weight_share,
+        swigelu=args.swigelu,
+        swigelu_hidden_dim=args.swigelu_hidden_dim,
     ).to(device).bfloat16()
     for m in hessian_model.modules():
         if isinstance(m, CastedLinear):
@@ -1967,6 +1990,8 @@ def main() -> None:
         recurrence_start=args.recurrence_start,
         recurrence_end=args.recurrence_end,
         weight_share=args.weight_share,
+        swigelu=args.swigelu,
+        swigelu_hidden_dim=args.swigelu_hidden_dim,
     ).to(device).bfloat16()
     eval_model.qo_bank.data = eval_model.qo_bank.data.float()
     eval_model.kv_bank.data = eval_model.kv_bank.data.float()
