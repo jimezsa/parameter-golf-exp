@@ -251,6 +251,7 @@ This backlog is restored for `autoresearch`. It is separate from the throughput 
 | Variant | Val BPB | Step Time (ms) | Steps @ Cap | Commit | Description |
 | ------- | ------- | -------------- | ----------- | ------ | ----------- |
 | baseline | 1.2035 | 778 | — | 069e7d5 | Exp 012 latent v3 baseline rerun (no quant), confirms reference |
+| baseline (fresh, pod 20260416) | 1.2063 | 794.79 | 740 | fdbfcca | Same-pod `SKIP_QUANT=1` control for throughput-probe reference; 588.1s train, peak 49.97 GiB, 135.4 MB raw |
 | `train_gpt_01_screen.py` | pending | pending | pending | — | Skip quant reserve during screening and trim compile warmup |
 | `train_gpt_02_loader_prefetch.py` | pending | pending | pending | — | Vectorized loader sampling with double-buffered H2D prefetch |
 | `train_gpt_03_bucketed_allreduce.py` | pending | pending | pending | — | Coalesced replicated-grad all-reduce path |
@@ -260,7 +261,7 @@ This backlog is restored for `autoresearch`. It is separate from the throughput 
 
 - [x] Forked from exp 012
 - [x] Added isolated throughput branches from baseline
-- [ ] Run fresh baseline control with `SKIP_QUANT=1`
+- [x] Run fresh baseline control with `SKIP_QUANT=1` (1.2063 @ 794.79ms, 740 steps)
 - [ ] Screen `train_gpt_01_screen.py`
 - [ ] Screen `train_gpt_02_loader_prefetch.py`
 - [ ] Smoke test `train_gpt_03_bucketed_allreduce.py`, then move to 8x if clean
