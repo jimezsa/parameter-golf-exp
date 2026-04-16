@@ -248,21 +248,23 @@ This backlog is restored for `autoresearch`. It is separate from the throughput 
 
 ## Iteration Results
 
-| Variant | Val BPB | Step Time (ms) | Steps @ Cap | Commit | Description |
-| ------- | ------- | -------------- | ----------- | ------ | ----------- |
-| baseline | 1.2035 | 778 | — | 069e7d5 | Exp 012 latent v3 baseline rerun (no quant), confirms reference |
-| baseline (fresh, pod 20260416) | 1.2063 | 794.79 | 740 | fdbfcca | Same-pod `SKIP_QUANT=1` control for throughput-probe reference; 588.1s train, peak 49.97 GiB, 135.4 MB raw. Log: `fresh_baseline_20260416.log` |
-| `train_gpt_01_screen.py` v1-probe | — | 745.47 | 10 | 234a1b5 | SIGHUP'd at step 10 during initial nohup setup; first attempt of v1 before official run. Log: `branch01_screen_sw2_20260416_partial10steps.log` |
-| `train_gpt_01_screen.py` v1 | 1.2072 | 805 | 731 | 234a1b5 | Screen-mode warmup=2, SKIP_QUANT=1, baseline rerun |
-| `train_gpt_01_screen.py` v2-attempt | FAIL | — | 0 | 234a1b5 | Crashed at startup: tokenizer file `./data/tokenizers/fineweb_8192_bpe.model` missing — data prep had not yet been run on this pod. Re-ran successfully as v2 (SwiGELU) after `cached_challenge_fineweb.py --variant sp8192`. Log: `branch01_screen_sw2_20260416_v2.log` |
-| `train_gpt_01_screen.py` v2 | 1.2035 | 779 | 756 | 234a1b5 | SwiGELU hidden_dim=1344 probe — inconclusive (later re-run at 1.2078) |
-| `train_gpt_01_screen.py` v3 | 1.2036 | 794 | 756 | 234a1b5 | Intended delayed-diffusion window 25%–60% — **code change not applied**, effectively a v2 noise re-run; recipe noise floor ~±0.001 BPB. Log: `branch01_screen_sw2_20260416_v3.log` |
-| `train_gpt_01_screen.py` v4 | **1.1996** | 761.57 | 788 | 5729718 | **Real delayed-diffusion window** `DIFFUSION_START_FRAC=0.25`, `DIFFUSION_STOP_FRAC=0.60` — diffusion startup at step 200 / cutoff at step 467 (confirmed in log). −0.0076 BPB vs v1 baseline on seed=1337; new exp 013 best on this seed. 600.1s train, 49.97 GiB peak, 135.4 MB raw. Log: `branch01_screen_sw2_20260416_v4_startfrac025.log` |
-| `train_gpt_01_screen.py` v5 | 1.2033 | 763.43 | 787 | 29225e5 | **Confirm-seed of v4** (`SEED=2026`, all else identical). Diffusion startup at step 199 / cutoff at step 466 (confirmed). −0.0039 vs v1 baseline, +0.0037 vs v4. Seed-averaged v4+v5 = 1.2015 → delayed-diffusion is a real but smaller effect than v4 alone suggested. 600.8s train, 49.9 GiB peak, 135.4 MB raw. Log: `branch01_screen_sw2_20260416_v5_seed2026.log` |
-| `train_gpt_01_screen.py` v6 | pending | pending | pending | pending | **AR self-gen GPTQ calibration** (biggest unclaimed lever). New env `GPTQ_CALIB_AR_SELFGEN=1` + `GPTQ_CALIB_PROMPT_LEN=8`. One-step self-label: one extra forward per calib batch replaces training tokens with the model's own next-token predictions (shifted by `prompt_len`), so Hessian activations match inference-time distribution. Inherits v4 config (seed=1337, delayed diffusion 25%–60%). **Full quant pipeline** (`SKIP_QUANT=0`). Expected −0.035 to −0.043 BPB post-quant vs training-token calibration. Log: `branch01_screen_sw2_20260416_v6_arsg.log` |
-| `train_gpt_02_loader_prefetch.py` | pending | pending | pending | — | Vectorized loader sampling with double-buffered H2D prefetch |
-| `train_gpt_03_bucketed_allreduce.py` | pending | pending | pending | — | Coalesced replicated-grad all-reduce path |
-| `train_gpt_04_cyclic_diffusion.py` | pending | pending | pending | — | Deterministic cyclic diffusion duty cycle |
+All log paths are relative to `experiments/013-ar-latent-diffusion/results/`.
+
+| Variant | Val BPB | Step Time (ms) | Steps @ Cap | Commit | Log | Description |
+| ------- | ------- | -------------- | ----------- | ------ | --- | ----------- |
+| baseline | 1.2035 | 778 | — | 069e7d5 | — | Exp 012 latent v3 baseline rerun (no quant), confirms reference |
+| baseline (fresh, pod 20260416) | 1.2063 | 794.79 | 740 | fdbfcca | [fresh_baseline_20260416.log](results/fresh_baseline_20260416.log) | Same-pod `SKIP_QUANT=1` control for throughput-probe reference; 588.1s train, peak 49.97 GiB, 135.4 MB raw. |
+| `train_gpt_01_screen.py` v1-probe | — | 745.47 | 10 | 234a1b5 | [branch01_screen_sw2_20260416_partial10steps.log](results/branch01_screen_sw2_20260416_partial10steps.log) | SIGHUP'd at step 10 during initial nohup setup; first attempt of v1 before official run. |
+| `train_gpt_01_screen.py` v1 | 1.2072 | 805 | 731 | 234a1b5 | — | Screen-mode warmup=2, SKIP_QUANT=1, baseline rerun |
+| `train_gpt_01_screen.py` v2-attempt | FAIL | — | 0 | 234a1b5 | [branch01_screen_sw2_20260416_v2.log](results/branch01_screen_sw2_20260416_v2.log) | Crashed at startup: tokenizer file `./data/tokenizers/fineweb_8192_bpe.model` missing — data prep had not yet been run on this pod. Re-ran successfully as v2 (SwiGELU) after `cached_challenge_fineweb.py --variant sp8192`. |
+| `train_gpt_01_screen.py` v2 | 1.2035 | 779 | 756 | 234a1b5 | — | SwiGELU hidden_dim=1344 probe — inconclusive (later re-run at 1.2078) |
+| `train_gpt_01_screen.py` v3 | 1.2036 | 794 | 756 | 234a1b5 | [branch01_screen_sw2_20260416_v3.log](results/branch01_screen_sw2_20260416_v3.log) | Intended delayed-diffusion window 25%–60% — **code change not applied**, effectively a v2 noise re-run; recipe noise floor ~±0.001 BPB. |
+| `train_gpt_01_screen.py` v4 | **1.1996** | 761.57 | 788 | 5729718 | [branch01_screen_sw2_20260416_v4_startfrac025.log](results/branch01_screen_sw2_20260416_v4_startfrac025.log) | **Real delayed-diffusion window** `DIFFUSION_START_FRAC=0.25`, `DIFFUSION_STOP_FRAC=0.60` — diffusion startup at step 200 / cutoff at step 467 (confirmed in log). −0.0076 BPB vs v1 baseline on seed=1337; new exp 013 best on this seed. 600.1s train, 49.97 GiB peak, 135.4 MB raw. |
+| `train_gpt_01_screen.py` v5 | 1.2033 | 763.43 | 787 | 29225e5 | [branch01_screen_sw2_20260416_v5_seed2026.log](results/branch01_screen_sw2_20260416_v5_seed2026.log) | **Confirm-seed of v4** (`SEED=2026`, all else identical). Diffusion startup at step 199 / cutoff at step 466 (confirmed). −0.0039 vs v1 baseline, +0.0037 vs v4. Seed-averaged v4+v5 = 1.2015 → delayed-diffusion is a real but smaller effect than v4 alone suggested. 600.8s train, 49.9 GiB peak, 135.4 MB raw. |
+| `train_gpt_01_screen.py` v6 | pending | pending | pending | pending | [branch01_screen_sw2_20260416_v6_arsg.log](results/branch01_screen_sw2_20260416_v6_arsg.log) | **AR self-gen GPTQ calibration** (biggest unclaimed lever). New env `GPTQ_CALIB_AR_SELFGEN=1` + `GPTQ_CALIB_PROMPT_LEN=8`. One-step self-label: one extra forward per calib batch replaces training tokens with the model's own next-token predictions (shifted by `prompt_len`), so Hessian activations match inference-time distribution. Inherits v4 config (seed=1337, delayed diffusion 25%–60%). **Full quant pipeline** (`SKIP_QUANT=0`). Expected −0.035 to −0.043 BPB post-quant vs training-token calibration. |
+| `train_gpt_02_loader_prefetch.py` | pending | pending | pending | — | — | Vectorized loader sampling with double-buffered H2D prefetch |
+| `train_gpt_03_bucketed_allreduce.py` | pending | pending | pending | — | — | Coalesced replicated-grad all-reduce path |
+| `train_gpt_04_cyclic_diffusion.py` | pending | pending | pending | — | — | Deterministic cyclic diffusion duty cycle |
 
 ## Status
 
