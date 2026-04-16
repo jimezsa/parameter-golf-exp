@@ -1,0 +1,41 @@
+[v11e] launching SEED=42 MATRIX_LR=0.045 AUX=0.03 startfrac=0.25 stopfrac=0.60 at 2026-04-16T18:47:15Z
+Traceback (most recent call last):
+  File "/workspace/parameter-golf-exp/experiments/013-ar-latent-diffusion/train_gpt_01_screen.py", line 2126, in <module>
+    main()
+  File "/workspace/parameter-golf-exp/experiments/013-ar-latent-diffusion/train_gpt_01_screen.py", line 1507, in main
+    raise RuntimeError("CUDA is required")
+RuntimeError: CUDA is required
+E0416 18:47:18.285000 106263 torch/distributed/elastic/multiprocessing/api.py:882] failed (exitcode: 1) local_rank: 0 (pid: 106331) of binary: /usr/local/bin/python
+Traceback (most recent call last):
+  File "/usr/local/bin/torchrun", line 7, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 357, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/run.py", line 936, in main
+    run(args)
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/run.py", line 927, in run
+    elastic_launch(
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/launcher/api.py", line 156, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/launcher/api.py", line 293, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+experiments/013-ar-latent-diffusion/train_gpt_01_screen.py FAILED
+------------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-04-16_18:47:18
+  host      : eab306a1cda4
+  rank      : 0 (local_rank: 0)
+  exitcode  : 1 (pid: 106331)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================
+[v11e] done at 2026-04-16T18:47:18Z
