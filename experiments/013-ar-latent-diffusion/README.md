@@ -94,6 +94,7 @@ torchrun --standalone --nproc_per_node=8 experiments/013-ar-latent-diffusion/tra
 | 2 | `train_gpt_02_loader_prefetch.py` | Loader + H2D overlap | `next_batch()` is still Python-heavy and does synchronous CPU assembly followed by synchronous H2D copies | Lower `step_avg`, better GPU utilization, no intended model change |
 | 3 | `train_gpt_03_bucketed_allreduce.py` | Replicated-grad communication | Replicated params are reduced one tensor at a time; that is cheap on 1x and dumb on 8x | Little change on 1x, cleaner scaling on 8x |
 | 4 | `train_gpt_04_cyclic_diffusion.py` | Graph-friendlier diffusion duty cycle | Per-microstep Python RNG adds jitter and makes the diffusion path harder to reason about | Small throughput win at best; main risk is BPB drift from schedule change |
+| 5 | `P1`-`P11` | HP Sweep Plan (Professor Handoff) | After the throughput branch verdicts, resume the professor-defined HP/calibration experiments tracked below | Direct BPB search space; keep only sweeps that improve post-quant or clearly strengthen the pre-quant baseline |
 
 ### Autoresearch Repo Contract
 
