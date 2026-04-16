@@ -1255,7 +1255,7 @@ class _HessianGPT(nn.Module):
                 self.blocks[i].attn.use_xsa = True
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
-    def forward(self, input_ids, target_ids):
+    def _trunk(self, input_ids):
         x = self.tok_emb(input_ids)
         x = F.rms_norm(x, (x.size(-1),))
         x0 = x
@@ -1281,7 +1281,17 @@ class _HessianGPT(nn.Module):
                 for _extra in range(self.recurrence_depth - 1):
                     for ri in range(self.recurrence_start, self.recurrence_end + 1):
                         x = self.blocks[ri](x, x0)
-        x = self.final_norm(x)
+        return self.final_norm(x)
+    def forward_logits(self, input_ids):
+        """Return logits of shape (B, T, V) without computing loss. Used for AR self-gen calibration."""
+        x = self._trunk(input_ids)
+        B, T, D = x.shape
+        x_flat = x.reshape(-1, D)
+        logits_proj = F.linear(x_flat, self.tok_emb.weight) if self.tie_embeddings else self.lm_head(x_flat)
+        logits = self.logit_softcap * torch.tanh(logits_proj / self.logit_softcap)
+        return logits.reshape(B, T, -1)
+    def forward(self, input_ids, target_ids):
+        x = self._trunk(input_ids)
         x_flat = x.reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
         logits_proj = F.linear(x_flat, self.tok_emb.weight) if self.tie_embeddings else self.lm_head(x_flat)
