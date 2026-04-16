@@ -1,0 +1,61 @@
+nohup: ignoring input
+logs/exp013_v10_seed1337_matrixlr025.txt
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_8192_bpe.model
+train_loader:dataset:fineweb10B_sp8192 train_shards:80
+val_loader:shards pattern=./data/datasets/fineweb10B_sp8192/fineweb_val_*.bin tokens:40546304
+model_params:36204632
+diffusion_aux:prob:0.03 weight:0.5000 start_frac:0.25 stop_frac:0.60 subsample:1.00 objective:latent_mse params:263168
+XSA:last_11 active_layers:[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+world_size:1 grad_accum_steps:8
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:8 num_kv_heads:4
+tie_embeddings:True embed_lr:0.03 head_lr:0.008 matrix_lr:0.025 scalar_lr:0.02
+quant_stack:compressor=brotli matrix_bits=6 embed_bits=8 matrix_clip_sigmas=12.85 embed_clip_sigmas=20.0 muon_row_normalize=True
+train_batch_tokens:786432 train_seq_len:2048 iterations:20000 warmup_steps:20 max_wallclock_seconds:600.000
+seed:1337
+gptq:reserve_skipped skip_quant:enabled effective_wallclock_ms:600000
+screen_mode:warmup_steps 20->2
+warmup_step:1/2
+warmup_step:2/2
+step:0/20000 val_loss:9.00738945 val_bpb:3.48765246 train_time:0ms step_avg:0.01ms
+step:1/20000 train_loss:9.0076 train_time:728ms step_avg:728.36ms
+step:2/20000 train_loss:12.3377 train_time:1400ms step_avg:699.93ms
+step:3/20000 train_loss:11.0938 train_time:2152ms step_avg:717.40ms
+step:4/20000 train_loss:9.5125 train_time:2907ms step_avg:726.70ms
+step:5/20000 train_loss:8.3535 train_time:3658ms step_avg:731.51ms
+step:6/20000 train_loss:7.6599 train_time:4412ms step_avg:735.35ms
+step:7/20000 train_loss:7.2747 train_time:5174ms step_avg:739.21ms
+step:8/20000 train_loss:7.0686 train_time:5935ms step_avg:741.82ms
+step:9/20000 train_loss:6.9166 train_time:6696ms step_avg:743.97ms
+step:10/20000 train_loss:6.8812 train_time:7457ms step_avg:745.67ms
+diffusion_startup:step:200 elapsed_ms:150746 frac:0.25
+W0416 15:02:41.047000 69693 torch/distributed/elastic/agent/server/api.py:725] Received 1 death signal, shutting down workers
+W0416 15:02:41.049000 69693 torch/distributed/elastic/multiprocessing/api.py:908] Sending process 69761 closing signal SIGHUP
+Traceback (most recent call last):
+  File "/usr/local/bin/torchrun", line 7, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 357, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/run.py", line 936, in main
+    run(args)
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/run.py", line 927, in run
+    elastic_launch(
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/launcher/api.py", line 156, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/launcher/api.py", line 284, in launch_agent
+    result = agent.run()
+             ^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/elastic/metrics/api.py", line 138, in wrapper
+    result = f(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/elastic/agent/server/api.py", line 717, in run
+    result = self._invoke_run(role)
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/elastic/agent/server/api.py", line 881, in _invoke_run
+    time.sleep(monitor_interval)
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/elastic/multiprocessing/api.py", line 85, in _terminate_process_handler
+    raise SignalException(f"Process {os.getpid()} got signal: {sigval}", sigval=sigval)
+torch.distributed.elastic.multiprocessing.api.SignalException: Process 69693 got signal: 1
