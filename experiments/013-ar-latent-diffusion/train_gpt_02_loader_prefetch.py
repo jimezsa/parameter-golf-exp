@@ -86,11 +86,13 @@ class Hyperparameters:
     diffusion_loss_weight = float(os.environ.get("DIFFUSION_LOSS_WEIGHT", 0.50))
     diffusion_aux_prob = float(os.environ.get("DIFFUSION_AUX_PROB", 0.05))
     diffusion_stop_frac = float(os.environ.get("DIFFUSION_STOP_FRAC", 0.60))  # fraction of wallclock after which diffusion is disabled (1.0 = never stop)
+    diffusion_start_frac = float(os.environ.get("DIFFUSION_START_FRAC", 0.00))  # fraction of wallclock before which diffusion is disabled (0.0 = always on)
     diffusion_subsample_frac = float(os.environ.get("DIFFUSION_SUBSAMPLE_FRAC", 1.00))  # optional fraction of seq positions for latent MSE loss
     # GPTQ calibration
     gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 32))
     gptq_block_size = int(os.environ.get("GPTQ_BLOCK_SIZE", 128))
     gptq_reserve_seconds = float(os.environ.get("GPTQ_RESERVE_SECONDS", 12.0))
+    screen_warmup_steps = int(os.environ.get("SCREEN_WARMUP_STEPS", 2))
     matrix_bits = int(os.environ.get("MATRIX_BITS", 6))
     embed_bits = int(os.environ.get("EMBED_BITS", 8))
     matrix_clip_sigmas = float(os.environ.get("MATRIX_CLIP_SIGMAS", 12.85))
@@ -1681,7 +1683,7 @@ def main() -> None:
     log0(f"model_params:{n_params}")
     log0(
         f"diffusion_aux:prob:{args.diffusion_aux_prob:.2f} "
-        f"weight:{args.diffusion_loss_weight:.4f} stop_frac:{args.diffusion_stop_frac:.2f} "
+        f"weight:{args.diffusion_loss_weight:.4f} start_frac:{args.diffusion_start_frac:.2f} stop_frac:{args.diffusion_stop_frac:.2f} "
         f"subsample:{args.diffusion_subsample_frac:.2f} objective:latent_mse params:{diffusion_params}"
     )
     xsa_layers = [i for i, b in enumerate(base_model.blocks) if b.attn.use_xsa]
@@ -1714,9 +1716,12 @@ def main() -> None:
         for opt in optimizers:
             opt.zero_grad(set_to_none=True)
     max_wallclock_ms = 1000.0 * args.max_wallclock_seconds if args.max_wallclock_seconds > 0 else None
-    if max_wallclock_ms is not None and args.gptq_reserve_seconds > 0:
-        max_wallclock_ms = max(max_wallclock_ms - 1000.0 * args.gptq_reserve_seconds, 0.0)
-        log0(f"gptq:reserving {args.gptq_reserve_seconds:.0f}s for quant/export effective_wallclock_ms:{max_wallclock_ms:.0f}")
+    effective_gptq_reserve_seconds = 0.0 if args.skip_quant else args.gptq_reserve_seconds
+    if max_wallclock_ms is not None and effective_gptq_reserve_seconds > 0:
+        max_wallclock_ms = max(max_wallclock_ms - 1000.0 * effective_gptq_reserve_seconds, 0.0)
+        log0(f"gptq:reserving {effective_gptq_reserve_seconds:.0f}s for quant/export effective_wallclock_ms:{max_wallclock_ms:.0f}")
+    elif max_wallclock_ms is not None and args.skip_quant and args.gptq_reserve_seconds > 0:
+        log0(f"gptq:reserve_skipped skip_quant:enabled effective_wallclock_ms:{max_wallclock_ms:.0f}")
     def lr_mul(step: int, elapsed_ms: float) -> float:
         if args.warmdown_iters <= 0 and args.warmdown_frac <= 0:
             return 1.0
@@ -1734,11 +1739,18 @@ def main() -> None:
         if frac >= 1.0 - args.warmdown_frac:
             return max((1.0 - frac) / max(args.warmdown_frac, 1e-9), args.min_lr)
         return 1.0
-    if args.warmup_steps > 0:
+    effective_warmup_steps = args.warmup_steps
+    has_diffusion = args.diffusion_loss_weight > 0.0 and args.diffusion_aux_prob > 0.0
+    if args.skip_quant and args.screen_warmup_steps >= 0:
+        min_compile_paths = 2 if has_diffusion else 1
+        effective_warmup_steps = min(args.warmup_steps, max(args.screen_warmup_steps, min_compile_paths))
+        if effective_warmup_steps != args.warmup_steps:
+            log0(f"screen_mode:warmup_steps {args.warmup_steps}->{effective_warmup_steps}")
+    if effective_warmup_steps > 0:
         initial_model_state = {name: tensor.detach().cpu().clone() for name, tensor in base_model.state_dict().items()}
         initial_optimizer_states = [copy.deepcopy(opt.state_dict()) for opt in optimizers]
         model.train()
-        for warmup_step in range(args.warmup_steps):
+        for warmup_step in range(effective_warmup_steps):
             zero_grad_all()
             for micro_step in range(grad_accum_steps):
                 x, y = train_loader.next_batch(args.train_batch_tokens, grad_accum_steps)
@@ -1746,7 +1758,6 @@ def main() -> None:
                     # Force both code paths through torch.compile during warmup:
                     # step 0 → diffusion ON, step 1 → diffusion OFF (if diffusion configured)
                     # This avoids a ~17s recompile on the first real diffusion step.
-                    has_diffusion = args.diffusion_loss_weight > 0.0 and args.diffusion_aux_prob > 0.0
                     if has_diffusion and warmup_step == 0:
                         warmup_use_diffusion = True
                     elif has_diffusion and warmup_step == 1:
@@ -1763,8 +1774,8 @@ def main() -> None:
             for opt in optimizers:
                 opt.step()
             zero_grad_all()
-            if args.warmup_steps <= 20 or (warmup_step + 1) % 10 == 0 or warmup_step + 1 == args.warmup_steps:
-                log0(f"warmup_step:{warmup_step + 1}/{args.warmup_steps}")
+            if effective_warmup_steps <= 20 or (warmup_step + 1) % 10 == 0 or warmup_step + 1 == effective_warmup_steps:
+                log0(f"warmup_step:{warmup_step + 1}/{effective_warmup_steps}")
         base_model.load_state_dict(initial_model_state, strict=True)
         for opt, state in zip(optimizers, initial_optimizer_states, strict=True):
             opt.load_state_dict(state)
@@ -1775,6 +1786,7 @@ def main() -> None:
     training_time_ms = 0.0
     stop_after_step: int | None = None
     diffusion_cutoff_logged = False
+    diffusion_startup_logged = False
     torch.cuda.synchronize()
     t0 = time.perf_counter()
     step = 0
@@ -1821,11 +1833,20 @@ def main() -> None:
         for micro_step in range(grad_accum_steps):
             x, y = train_loader.next_batch(args.train_batch_tokens, grad_accum_steps)
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
-                diffusion_active = (
+                before_start = (
+                    args.diffusion_start_frac > 0.0
+                    and max_wallclock_ms is not None
+                    and elapsed_ms < args.diffusion_start_frac * max_wallclock_ms
+                )
+                after_stop = not (
                     args.diffusion_stop_frac >= 1.0
                     or (max_wallclock_ms is not None and elapsed_ms < args.diffusion_stop_frac * max_wallclock_ms)
                 )
-                if not diffusion_active and not diffusion_cutoff_logged:
+                diffusion_active = not before_start and not after_stop
+                if not before_start and not diffusion_startup_logged and args.diffusion_start_frac > 0.0:
+                    log0(f"diffusion_startup:step:{step} elapsed_ms:{elapsed_ms:.0f} frac:{args.diffusion_start_frac:.2f}")
+                    diffusion_startup_logged = True
+                if after_stop and not diffusion_cutoff_logged:
                     log0(f"diffusion_cutoff:step:{step} elapsed_ms:{elapsed_ms:.0f} frac:{args.diffusion_stop_frac:.2f}")
                     diffusion_cutoff_logged = True
                 use_diffusion = (
