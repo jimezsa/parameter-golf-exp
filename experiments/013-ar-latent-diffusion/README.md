@@ -252,7 +252,9 @@ This backlog is restored for `autoresearch`. It is separate from the throughput 
 | ------- | ------- | -------------- | ----------- | ------ | ----------- |
 | baseline | 1.2035 | 778 | — | 069e7d5 | Exp 012 latent v3 baseline rerun (no quant), confirms reference |
 | baseline (fresh, pod 20260416) | 1.2063 | 794.79 | 740 | fdbfcca | Same-pod `SKIP_QUANT=1` control for throughput-probe reference; 588.1s train, peak 49.97 GiB, 135.4 MB raw |
-| `train_gpt_01_screen.py` | pending | pending | pending | — | Skip quant reserve during screening and trim compile warmup |
+| `train_gpt_01_screen.py` v1 | 1.2072 | 805 | 731 | 234a1b5 | Screen-mode warmup=2, SKIP_QUANT=1, baseline rerun |
+| `train_gpt_01_screen.py` v2 | 1.2035 | 779 | 756 | 234a1b5 | SwiGELU hidden_dim=1344 probe — inconclusive (later re-run at 1.2078) |
+| `train_gpt_01_screen.py` v3 | 1.2036 | 794 | 756 | 234a1b5 | Intended delayed-diffusion window 25%–60% — **code change not applied**, effectively a v2 noise re-run; recipe noise floor ~±0.001 BPB |
 | `train_gpt_02_loader_prefetch.py` | pending | pending | pending | — | Vectorized loader sampling with double-buffered H2D prefetch |
 | `train_gpt_03_bucketed_allreduce.py` | pending | pending | pending | — | Coalesced replicated-grad all-reduce path |
 | `train_gpt_04_cyclic_diffusion.py` | pending | pending | pending | — | Deterministic cyclic diffusion duty cycle |

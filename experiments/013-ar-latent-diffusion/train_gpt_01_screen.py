@@ -86,6 +86,7 @@ class Hyperparameters:
     diffusion_loss_weight = float(os.environ.get("DIFFUSION_LOSS_WEIGHT", 0.50))
     diffusion_aux_prob = float(os.environ.get("DIFFUSION_AUX_PROB", 0.05))
     diffusion_stop_frac = float(os.environ.get("DIFFUSION_STOP_FRAC", 0.60))  # fraction of wallclock after which diffusion is disabled (1.0 = never stop)
+    diffusion_start_frac = float(os.environ.get("DIFFUSION_START_FRAC", 0.00))  # fraction of wallclock before which diffusion is disabled (0.0 = always on)
     diffusion_subsample_frac = float(os.environ.get("DIFFUSION_SUBSAMPLE_FRAC", 1.00))  # optional fraction of seq positions for latent MSE loss
     # GPTQ calibration
     gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 32))
@@ -1623,7 +1624,7 @@ def main() -> None:
     log0(f"model_params:{n_params}")
     log0(
         f"diffusion_aux:prob:{args.diffusion_aux_prob:.2f} "
-        f"weight:{args.diffusion_loss_weight:.4f} stop_frac:{args.diffusion_stop_frac:.2f} "
+        f"weight:{args.diffusion_loss_weight:.4f} start_frac:{args.diffusion_start_frac:.2f} stop_frac:{args.diffusion_stop_frac:.2f} "
         f"subsample:{args.diffusion_subsample_frac:.2f} objective:latent_mse params:{diffusion_params}"
     )
     xsa_layers = [i for i, b in enumerate(base_model.blocks) if b.attn.use_xsa]
@@ -1726,6 +1727,7 @@ def main() -> None:
     training_time_ms = 0.0
     stop_after_step: int | None = None
     diffusion_cutoff_logged = False
+    diffusion_startup_logged = False
     torch.cuda.synchronize()
     t0 = time.perf_counter()
     step = 0
@@ -1772,11 +1774,20 @@ def main() -> None:
         for micro_step in range(grad_accum_steps):
             x, y = train_loader.next_batch(args.train_batch_tokens, grad_accum_steps)
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
-                diffusion_active = (
+                before_start = (
+                    args.diffusion_start_frac > 0.0
+                    and max_wallclock_ms is not None
+                    and elapsed_ms < args.diffusion_start_frac * max_wallclock_ms
+                )
+                after_stop = not (
                     args.diffusion_stop_frac >= 1.0
                     or (max_wallclock_ms is not None and elapsed_ms < args.diffusion_stop_frac * max_wallclock_ms)
                 )
-                if not diffusion_active and not diffusion_cutoff_logged:
+                diffusion_active = not before_start and not after_stop
+                if not before_start and not diffusion_startup_logged and args.diffusion_start_frac > 0.0:
+                    log0(f"diffusion_startup:step:{step} elapsed_ms:{elapsed_ms:.0f} frac:{args.diffusion_start_frac:.2f}")
+                    diffusion_startup_logged = True
+                if after_stop and not diffusion_cutoff_logged:
                     log0(f"diffusion_cutoff:step:{step} elapsed_ms:{elapsed_ms:.0f} frac:{args.diffusion_stop_frac:.2f}")
                     diffusion_cutoff_logged = True
                 use_diffusion = (
