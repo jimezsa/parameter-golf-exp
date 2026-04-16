@@ -255,6 +255,7 @@ This backlog is restored for `autoresearch`. It is separate from the throughput 
 | `train_gpt_01_screen.py` v1 | 1.2072 | 805 | 731 | 234a1b5 | Screen-mode warmup=2, SKIP_QUANT=1, baseline rerun |
 | `train_gpt_01_screen.py` v2 | 1.2035 | 779 | 756 | 234a1b5 | SwiGELU hidden_dim=1344 probe — inconclusive (later re-run at 1.2078) |
 | `train_gpt_01_screen.py` v3 | 1.2036 | 794 | 756 | 234a1b5 | Intended delayed-diffusion window 25%–60% — **code change not applied**, effectively a v2 noise re-run; recipe noise floor ~±0.001 BPB |
+| `train_gpt_01_screen.py` v4 | **1.1996** | 761.57 | 788 | 5729718 | **Real delayed-diffusion window** `DIFFUSION_START_FRAC=0.25`, `DIFFUSION_STOP_FRAC=0.60` — diffusion startup at step 200 / cutoff at step 467 (confirmed in log). −0.0076 BPB vs v1 baseline, well beyond noise floor; new exp 013 best. 600.1s train, 49.97 GiB peak, 135.4 MB raw |
 | `train_gpt_02_loader_prefetch.py` | pending | pending | pending | — | Vectorized loader sampling with double-buffered H2D prefetch |
 | `train_gpt_03_bucketed_allreduce.py` | pending | pending | pending | — | Coalesced replicated-grad all-reduce path |
 | `train_gpt_04_cyclic_diffusion.py` | pending | pending | pending | — | Deterministic cyclic diffusion duty cycle |
