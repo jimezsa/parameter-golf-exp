@@ -2,9 +2,9 @@
 
 ## Motivation
 
-Exp 012 (latent v3) achieved post-quant sw BPB 1.2036 on 1xH100 — our project best — but left significant performance on the table due to weak quantization calibration. The quant gap was 0.048 BPB, far worse than exp 009's ~0.001 gap, because 012 used only 32 batches of training data for GPTQ calibration instead of AR-generated sequences.
+Exp 013 inherits the Exp 012 AR-latent recipe, but the main lever here is calibration rather than architecture churn. The training-side reference to beat is Exp 012 v10 at **1.2025** pre-quant BPB on 1xH100, while Exp 011 latent v3 showed this family can hold a near-zero post-quant gap at **1.2036** sliding-window BPB.
 
-The eval phase gets its own separate 10-minute budget (not counted against training). This means full AR self-gen calibration (64+ sequences, ~200s) is legal and free. That alone should cut the quant gap from 0.048 to ~0.005–0.010, yielding an estimated post-quant BPB of **~1.10–1.105** on 1xH100.
+The eval phase gets its own separate 10-minute budget (not counted against training). This means full AR self-gen calibration (64+ sequences, ~200s) is legal and free. That is the cleanest remaining lever to tighten post-quant quality without burning training wallclock.
 
 ## Improvements Over Exp 012
 
@@ -15,7 +15,7 @@ The eval phase gets its own separate 10-minute budget (not counted against train
 - Legal in eval phase — separate 10-min budget
 - Expected impact: -0.035 to -0.043 BPB post-quant
 
-## Baseline (inherited from Exp 012 latent v3)
+## Baseline (inherited config)
 
 - SP8192 tokenizer, 11L/512d
 - WD=0.090, brotli-11 + byte-shuffle
@@ -23,8 +23,15 @@ The eval phase gets its own separate 10-minute budget (not counted against train
 - QK-Gain 5.0
 - Latent MSE diffusion (AUX_PROB=0.05, STOP_FRAC=0.60)
 - LATE_QAT_THRESHOLD=0.15, GPTQ_CALIB_BATCHES=32
-- Pre-quant sw BPB: 1.2045 (1xH100)
-- Post-quant sw BPB: 1.2036 (1xH100, quant gap 0.0005)
+
+## Baseline Results Snapshot
+
+| Source | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact | Commit | Notes |
+| ------ | ------- | -------------- | -------------- | -------- | ------ | ----- |
+| Exp 011 latent v3 | 1.2031 | 1.2036 (sw) | 772 | 15.90MB | `b60c5d7` | Near-zero quant degradation reference for this model family |
+| Exp 012 v8 clean baseline | 1.2045 | — (`SKIP_QUANT`) | 783 | — | `0bbe3b2` | Clean 1x reference before delayed diffusion |
+| Exp 012 v10 best 1x reference | **1.2025** | — (`SKIP_QUANT`) | 769 | — | `9edddbe` | Delayed diffusion window `25%`–`60%`; pre-quant target to beat |
+| Exp 012 baseline 8x | **1.0968** | **1.1272 (sw)** | ~106 | 15,989,969 bytes | — | 8xH100 reference from `train_gpt_baseline.py` |
 
 ## File Convention
 
@@ -249,7 +256,8 @@ This backlog is restored for `autoresearch`. It is separate from the throughput 
 
 | Variant | Val BPB | Step Time (ms) | Steps @ Cap | Commit | Description |
 | ------- | ------- | -------------- | ----------- | ------ | ----------- |
-| baseline | 1.2035 | 778 | — | 069e7d5 | Exp 012 latent v3 baseline rerun (no quant), confirms reference |
+| `train_gpt.py` baseline | 1.2035 | 778 | 756 | `069e7d5` | Current Exp 013 no-quant baseline rerun from `results/exp013_baseline.txt` |
+| `train_gpt_v1.py` | 1.2034 | 779 | 756 | `a750503` | Historical AR self-gen calibration probe from `results/exp013_v1_fixed.txt` (pre-quant only) |
 | `train_gpt_01_screen.py` | pending | pending | pending | — | Skip quant reserve during screening and trim compile warmup |
 | `train_gpt_02_loader_prefetch.py` | pending | pending | pending | — | Vectorized loader sampling with double-buffered H2D prefetch |
 | `train_gpt_03_bucketed_allreduce.py` | pending | pending | pending | — | Coalesced replicated-grad all-reduce path |
