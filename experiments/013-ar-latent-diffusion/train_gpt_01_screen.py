@@ -92,6 +92,8 @@ class Hyperparameters:
     gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 32))
     gptq_block_size = int(os.environ.get("GPTQ_BLOCK_SIZE", 128))
     gptq_reserve_seconds = float(os.environ.get("GPTQ_RESERVE_SECONDS", 12.0))
+    gptq_calib_ar_selfgen = bool(int(os.environ.get("GPTQ_CALIB_AR_SELFGEN", "0")))
+    gptq_calib_prompt_len = int(os.environ.get("GPTQ_CALIB_PROMPT_LEN", "8"))
     screen_warmup_steps = int(os.environ.get("SCREEN_WARMUP_STEPS", 2))
     matrix_bits = int(os.environ.get("MATRIX_BITS", 6))
     embed_bits = int(os.environ.get("EMBED_BITS", 8))
@@ -1286,8 +1288,39 @@ class _HessianGPT(nn.Module):
         logits = self.logit_softcap * torch.tanh(logits_proj / self.logit_softcap)
         return F.cross_entropy(logits.float(), targets, reduction="mean")
 
-def collect_hessians(hessian_model, train_loader, args, device, grad_accum_steps, num_batches=256):
+def _build_ar_selfgen_inputs(hessian_model, train_loader, args, grad_accum_steps, num_batches, prompt_len):
+    """Pre-generate self-labeled calibration inputs (no hooks active).
+
+    For each training batch (x, y), run one forward pass to get the model's own
+    next-token predictions. Build x_self = [x[:, :prompt_len], preds[:, prompt_len-1:-1]]
+    so that positions >= prompt_len contain the model's own greedy next-token choice
+    given the preceding (model-generated) context. This matches the activation
+    distribution seen at inference time more closely than teacher-forced training
+    tokens — the GPTQ literature motivation for self-gen calibration.
+    """
+    inputs = []
+    hessian_model.eval()
+    with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        for _ in range(num_batches):
+            x, y = train_loader.next_batch(args.train_batch_tokens, grad_accum_steps)
+            logits = hessian_model.forward_logits(x)
+            preds = logits.argmax(dim=-1)
+            p = max(1, min(prompt_len, x.shape[1] - 1))
+            x_self = x.clone()
+            x_self[:, p:] = preds[:, p - 1:-1]
+            inputs.append((x_self, y))
+    return inputs
+
+def collect_hessians(hessian_model, train_loader, args, device, grad_accum_steps, num_batches=256,
+                     ar_selfgen=False, ar_prompt_len=8):
     """Run calibration batches through a non-banked model, collecting H = X^T X for each CastedLinear."""
+    hessian_model.eval()
+    # Phase 1: optionally pre-generate self-labeled calibration inputs (before hooks are live).
+    calib_inputs = None
+    if ar_selfgen:
+        calib_inputs = _build_ar_selfgen_inputs(
+            hessian_model, train_loader, args, grad_accum_steps, num_batches, ar_prompt_len,
+        )
     hessians = {}
     hooks = []
     for name, module in hessian_model.named_modules():
@@ -1304,11 +1337,14 @@ def collect_hessians(hessian_model, train_loader, args, device, grad_accum_steps
                 return hook_fn
             h = module.register_forward_hook(make_hook(param_name))
             hooks.append(h)
-    hessian_model.eval()
     with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-        for _ in range(num_batches):
-            x, y = train_loader.next_batch(args.train_batch_tokens, grad_accum_steps)
-            hessian_model(x, y)
+        if calib_inputs is not None:
+            for x, y in calib_inputs:
+                hessian_model(x, y)
+        else:
+            for _ in range(num_batches):
+                x, y = train_loader.next_batch(args.train_batch_tokens, grad_accum_steps)
+                hessian_model(x, y)
     for h in hooks:
         h.remove()
     for name in hessians:
@@ -1914,7 +1950,11 @@ def main() -> None:
         {k: v.to(device) for k, v in unbanked_sd.items() if k in hessian_model.state_dict()},
         strict=False,
     )
-    log0(f"gptq:collecting hessians from {args.gptq_calib_batches} calibration batches...")
+    if args.gptq_calib_ar_selfgen:
+        log0(f"gptq:collecting hessians from {args.gptq_calib_batches} AR self-gen calibration batches "
+             f"(prompt_len={args.gptq_calib_prompt_len})...")
+    else:
+        log0(f"gptq:collecting hessians from {args.gptq_calib_batches} calibration batches...")
     calib_loader = ShuffledSequenceLoader(args, rank, world_size, device)
     hessians = collect_hessians(
         hessian_model,
@@ -1923,6 +1963,8 @@ def main() -> None:
         device,
         grad_accum_steps,
         num_batches=args.gptq_calib_batches,
+        ar_selfgen=args.gptq_calib_ar_selfgen,
+        ar_prompt_len=args.gptq_calib_prompt_len,
     )
     log0(f"gptq:collected hessians for {len(hessians)} layers")
     del hessian_model
