@@ -144,6 +144,107 @@ branch_prefix: autoresearch/exp013-throughput
 3. Only after a branch survives the 1x screen should `autoresearch` edit that same file for follow-up tuning.
 4. For `train_gpt_03_bucketed_allreduce.py`, move to 8x quickly because that branch is about scaling, not single-GPU heroics.
 
+## HP Sweep Plan (Professor Handoff)
+
+This backlog is restored for `autoresearch`. It is separate from the throughput probes above and should be picked up once the current branch screens are resolved or when a modeling-focused iteration is the better bet.
+
+**Goal:** drive **post-training (pre-quant, 1xH100) sw BPB** below `1.2025` (exp 012 v10). This is not the post-quant gap; that remains a separate lever. Read metric names literally: "post-training BPB" means pre-quant 1xH100 BPB.
+
+### Tier 1 — Optimizer & schedule
+
+**P1. Peak LR + warmup + cooldown shape**
+- Peak LR ∈ `{1.5e-3, 2e-3, 2.5e-3, 3e-3}`
+- Warmup frac ∈ `{0.02, 0.05, 0.10}`
+- Cooldown shape ∈ `{linear, cosine, 1-sqrt}`
+- Why: small models are LR-sensitive, and cooldown shape can matter more than peak at this scale.
+- Expected: `0.005–0.015` BPB
+
+**P2. MuonEq-R internals**
+- Newton-Schulz steps ∈ `{5, 6, 7}`
+- Momentum ∈ `{0.90, 0.95, 0.98}`
+- Embed/head AdamW LR ratio ∈ `{0.5x, 1x, 2x}` Muon LR
+- Why: embed/head LR mismatch is a known lever; `ns_steps` trades stability for orthogonality.
+- Expected: `0.005–0.012` BPB
+
+**P3. Batch size x sequence length shape**
+- Effective batch ∈ `{0.5x, 1x, 2x}` via grad accumulation
+- Seq length ∈ `{1024, 2048, 4096}`
+- Why: token budget is fixed; reshaping it changes gradient noise and diffusion window in tokens.
+- Expected: `0.003–0.010` BPB
+
+### Tier 2 — Latent-diffusion modeling
+
+**P4. Latent dimension**
+- ∈ `{64, 128, 256, 384}`
+- Why: capacity-vs-aux-loss tradeoff; the inherited setup may be under- or over-provisioned.
+- Expected: `0.003–0.010` BPB
+
+**P5. Diffusion loss weight**
+- Aux weight relative to CE ∈ `{0.5, 1.0, 1.5, 2.0}`
+- Why: the current weight was set when diffusion acted more like a regularizer than a primary objective.
+- Expected: `0.003–0.008` BPB
+
+**P6. Noise schedule shape**
+- Schedule ∈ `{linear, cosine, sigmoid}`
+- Noise std range ∈ `{[0.1, 1.0], [0.2, 1.5], [0.3, 2.0]}`
+- Why: schedule shape interacts with when diffusion is active during training.
+- Expected: `0.003–0.008` BPB
+
+### Tier 3 — Architecture micro-tweaks
+
+**P7. RoPE base**
+- ∈ `{10000, 25000, 50000, 100000}`
+- Why: a smaller base often helps short-context small models.
+- Expected: `0.002–0.006` BPB
+
+**P8. Init & residual scaling**
+- Depth-scaled init ∈ `{1, 1/sqrt(2L), 1/sqrt(L)}`
+- Residual gain ∈ `{0.5, 0.707, 1.0}`
+- Why: 11 layers is shallow enough that init-scale effects can still show up.
+- Expected: `0.002–0.005` BPB
+
+**P9. Logit softcap + tied/untied embeds**
+- Softcap ∈ `{none, 30, 50}`
+- Tied vs untied output projection
+- Why: untied output often helps BPB but costs params; softcap can stabilize logits.
+- Expected: `0.002–0.006` BPB
+
+### Tier 4 — Regularization
+
+**P10. Z-loss**
+- Coefficient ∈ `{0, 1e-4, 1e-3, 1e-2}`
+- Why: cheap logit regularizer with small but sometimes persistent gains.
+- Expected: `0.002–0.005` BPB
+
+**P11. EMA decay (eval-time)**
+- Decay ∈ `{0.9990, 0.9995, 0.9999}`
+- Why: eval usually uses EMA weights, so this is a direct pre-quant BPB lever.
+- Expected: `0.003–0.008` BPB
+
+### Suggested Sweep Order (~10-run Budget)
+
+1. `P1` LR / warmup / cooldown grid (2 runs)
+2. `P2` Muon `ns_steps` + embed-LR ratio (2 runs)
+3. `P5` diffusion loss weight (1 run)
+4. `P4` latent dim (1 run)
+5. `P11` EMA decay (1 run, stackable)
+6. `P6` noise schedule (1 run)
+7. `P10` z-loss (1 run, stackable)
+8. `P3` or `P7` depending on remaining signal (1 run)
+
+### Iteration Policy (Autoresearch)
+
+- Per HP proposal: `3–5` runs, not `10+`.
+- Grid proposals (`P1`, `P2`, `P4`): `3–5` runs to cover the grid, then 2 seeds at the best cell if the signal is borderline.
+- Single-knob proposals (`P5`, `P10`, `P11`): `2–3` runs: baseline, hypothesis point, optional third if delta is within noise.
+- Post-hoc or stackable proposals: `0` training runs; evaluate on existing checkpoints when possible.
+- Three-gate structure per proposal:
+  1. Scout run: does the direction move BPB at all?
+  2. Tune runs: narrow to the best value.
+  3. Confirm run: second seed at the winner if delta is smaller than `0.005` BPB.
+- Experiment-level rule: the standing `10+` iterations before kill/keep rule applies to exp 013 as a whole, not to each HP proposal in isolation.
+- Killed / do-not-re-propose: Mamba, MoE, ternary, vocab-space diffusion, depth recurrence, parallel residuals, QK-gain `5.25`, WD tuning.
+
 ## Iteration Results
 
 | Variant | Val BPB | Step Time (ms) | Steps @ Cap | Commit | Description |
@@ -164,3 +265,4 @@ branch_prefix: autoresearch/exp013-throughput
 - [ ] Smoke test `train_gpt_03_bucketed_allreduce.py`, then move to 8x if clean
 - [ ] Screen `train_gpt_04_cyclic_diffusion.py`
 - [ ] Keep / discard each branch before any stacking
+- [ ] Resume professor HP sweep backlog (`P1`-`P11`) after the throughput branch verdicts
