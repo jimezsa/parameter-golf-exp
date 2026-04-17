@@ -349,6 +349,7 @@ HP re-tuning on 8xH100 (10 min wallclock, ~5800 steps). All runs use 02 harness,
 | v11-8x | 0.020 | 0.00 | 0.667 | 1337 | 1.0967 | 104.07 | 5766 | [v11_8x_wd110.log](results/v11_8x_wd110.log) | WD=0.110 (vs 0.090 default) — +0.0003 vs v6-8x, within noise. **WD dead on 8xH100 too.** |
 | v10-8x-gptq-final | 0.020 | 0.00 | 0.667 | 1337 | KILLED | — | — | — | GPTQ re-run — killed per user directive (skip post-quant, continue iterations). |
 | v12-8x | 0.020 | 0.00 | 0.667 | 1337 | 1.0967 | 103.92 | 5775 | [v12_8x_lateqat010.log](results/v12_8x_lateqat010.log) | LATE_QAT_THRESHOLD=0.10 (vs 0.15 default) — +0.0003 vs v6-8x, within noise. late_qat enabled at step 5382 (vs ~5177 at default). **Dead on 8xH100 too.** |
+| v13-8x | 0.020 | 0.00 | 0.667 | 1337 | 1.0963 | 103.42 | 5803 | [v13_8x_auxprob002.log](results/v13_8x_auxprob002.log) | DIFFUSION_AUX_PROB=0.02 (vs 0.03 default) — −0.0001 vs v6-8x, within noise. Lighter diffusion does not help on 8xH100. **Dead lever.** |
 
 **8xH100 best pre-quant: 1.0960** (v9-8x-retry, nominally) / **1.0964** (v6-8x, defensible default recipe).
 
@@ -361,6 +362,8 @@ HP re-tuning on 8xH100 (10 min wallclock, ~5800 steps). All runs use 02 harness,
 **WD=0.110 scan verdict:** Dead on 8xH100. v11-8x = 1.0967 vs v6-8x = 1.0964 (+0.0003, within noise). Consistent with 1xH100 result (5th dead lever).
 
 **LATE_QAT_THRESHOLD scan verdict (8xH100):** Dead. v12-8x (LATE_QAT_THRESHOLD=0.10) = 1.0967 vs v6-8x (0.15 default) = 1.0964 (+0.0003, within noise). Consistent with 1xH100 result (16th dead lever). QAT threshold is insensitive at both scales.
+
+**AUX_PROB=0.02 scan verdict (8xH100):** Dead. v13-8x = 1.0963 vs v6-8x = 1.0964 (−0.0001, within noise). Lighter diffusion regularization does not improve at 8xH100 scale. On 1xH100 the 0.03→0.05 move was −0.0007; on 8xH100 the 0.02→0.03 move is noise. Diffusion strength direction exhausted on 8xH100.
 
 ## Status
 
