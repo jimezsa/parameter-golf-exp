@@ -1,0 +1,85 @@
+# Experiment 014: AR Self-Gen GPTQ Baseline
+
+## Purpose
+
+Exp 014 pulls the AR self-gen GPTQ lane out of Exp 013 and makes it the clean baseline. Training keeps the proven loader-prefetch harness, but the quantization and diffusion-stability path changes:
+
+- GPTQ calibration uses self-generated AR trajectories instead of clean teacher-forced batches
+- GPTQ returns to clip-sigma scaling
+- diffusion-specific parameters get stricter decay than the generic scalar/head groups
+- the default diffusion cooldown ends earlier so the model gets a longer pure-AR tail before quantization
+
+Exp 013 remains the historical scratchpad for throughput probes and HP sweeps. Exp 014 is the lean baseline lane.
+
+## Baseline File
+
+- `train_gpt.py` is the single baseline entrypoint for this experiment.
+
+## Locked Baseline Defaults
+
+Shared defaults:
+
+- 11L / 512d, SP8192 tokenizer, latent-MSE diffusion, MuonEq-R, brotli + byte-shuffle
+- `SCALAR_LR=0.02`
+- `HEAD_LR=0.008`
+- `TIED_EMBED_LR=0.03`
+- `DIFFUSION_AUX_PROB=0.03`
+- `DIFFUSION_START_FRAC=0.25`
+- `DIFFUSION_STOP_FRAC=0.40`
+- `WARMDOWN_FRAC=0.667`
+- `WARMUP_STEPS=20`
+- `MUON_WD=0.090`
+- `LATE_QAT_THRESHOLD=0.15`
+- `SWA_ENABLED=1`
+- `GPTQ_CALIB_BATCHES=64`
+- `SELFGEN_PROMPT_LEN=32`
+- `SELFGEN_SEQ_LEN=256`
+- `SELFGEN_BATCH_SIZE=8`
+- `SELFGEN_TEMPERATURE=0.8`
+- `DIFFUSION_SCALAR_WD=0.08`
+- `DIFFUSION_HEAD_WD=0.08`
+- `MATRIX_CLIP_SIGMAS=12.85`
+- `EMBED_CLIP_SIGMAS=20.0`
+
+Scale-aware defaults inside `train_gpt.py`:
+
+- 1xH100 baseline: `MATRIX_LR=0.045`, `MIN_LR=0.05`
+- 8xH100 baseline: `MATRIX_LR=0.020`, `MIN_LR=0.00`
+
+If you need to override either profile, pass env vars explicitly. Otherwise the file auto-selects the 8x matrix/min-LR pair when `WORLD_SIZE=8`.
+
+## Run Commands
+
+1xH100 baseline screen:
+
+```bash
+RUN_ID=exp014_1x_baseline \
+SEED=1337 \
+SKIP_QUANT=1 \
+torchrun --standalone --nproc_per_node=1 \
+experiments/014-ar-selfgen-gptq/train_gpt.py
+```
+
+8xH100 baseline screen:
+
+```bash
+RUN_ID=exp014_8x_baseline \
+SEED=1337 \
+SKIP_QUANT=1 \
+torchrun --standalone --nproc_per_node=8 \
+experiments/014-ar-selfgen-gptq/train_gpt.py
+```
+
+Full GPTQ baseline:
+
+```bash
+RUN_ID=exp014_gptq_full \
+SEED=1337 \
+torchrun --standalone --nproc_per_node=1 \
+experiments/014-ar-selfgen-gptq/train_gpt.py
+```
+
+## Notes
+
+- The earlier `DIFFUSION_STOP_FRAC=0.60` recipe was the best validated Exp 013 training baseline. Exp 014 intentionally shortens that default to `0.40` because this lane is targeting quantization stability, not just pre-quant BPB.
+- The first real gate for Exp 014 is straightforward: fresh 1x pre-quant BPB plus one full post-quant run to measure whether AR self-gen calibration actually closes the gap enough to justify the new lane.
