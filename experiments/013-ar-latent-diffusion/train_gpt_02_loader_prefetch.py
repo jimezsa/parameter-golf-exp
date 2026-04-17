@@ -2157,12 +2157,15 @@ def main() -> None:
     del hessian_model
     torch.cuda.empty_cache()
     quant_result, quant_meta = mixed_quantize_int6(unbanked_sd, args, hessians=hessians)
-    # NOVEL: Selective ±1 pruning by reconstruction error
+    # NOVEL: Selective ±1 pruning by reconstruction error (vectorized)
     # Sort ±1 quantized values by their reconstruction error (scale²),
     # prune least-impactful first until artifact fits target size.
     target_mb = float(os.environ.get("TARGET_MB", "15.999"))
     code_bytes_est = len(code.encode("utf-8"))
-    ones_info = []  # (tensor_key, flat_idx, error)
+    # Build per-tensor sorted indices for vectorized pruning
+    prune_keys = []   # tensor keys that have ±1 candidates
+    prune_idx = []     # flat indices into each tensor, sorted by error (ascending)
+    all_errors = []    # corresponding errors for global sort
     for name, info in quant_meta.items():
         if not (isinstance(info, str) and info == "gptq (int6)"): continue
         qk, sk = name + ".q", name + ".scale"
@@ -2174,36 +2177,70 @@ def main() -> None:
                 row_idx = torch.arange(q.shape[0]).unsqueeze(1).expand_as(q)[ones_mask]
                 flat_idx = torch.arange(q.numel()).reshape(q.shape)[ones_mask]
                 errors = s.float()[row_idx].pow(2)
-                for fi, err in zip(flat_idx.tolist(), errors.tolist()):
-                    ones_info.append((qk, fi, err))
-    if ones_info:
-        ones_info.sort(key=lambda x: x[2])
-        def _try_prune(n):
+                order = errors.argsort()
+                prune_keys.append(qk)
+                prune_idx.append(flat_idx[order])
+                all_errors.append(errors[order])
+    total_candidates = sum(len(e) for e in all_errors)
+    if total_candidates > 0:
+        # Build a global sorted order across all tensors
+        global_errors = torch.cat(all_errors)
+        global_order = global_errors.argsort()
+        # Map global index -> (tensor_group_idx, local_position)
+        offsets = []
+        off = 0
+        for e in all_errors:
+            offsets.append(off)
+            off += len(e)
+        # For each tensor, precompute which global positions map to it
+        group_ids = torch.zeros(total_candidates, dtype=torch.long)
+        for gi, e in enumerate(all_errors):
+            group_ids[offsets[gi]:offsets[gi]+len(e)] = gi
+        sorted_group_ids = group_ids[global_order]
+        # Precompute local indices within each group after global sort
+        sorted_local_pos = torch.zeros(total_candidates, dtype=torch.long)
+        for gi in range(len(prune_keys)):
+            mask = (sorted_group_ids == gi)
+            sorted_local_pos[mask] = torch.arange(mask.sum())
+        def _apply_prune(n):
+            """Zero out the n least-impactful ±1 values (vectorized)."""
             tmp = {k: v.clone() for k, v in quant_result.items()}
-            for i in range(min(n, len(ones_info))):
-                tmp[ones_info[i][0]].view(-1)[ones_info[i][1]] = 0
+            if n <= 0:
+                return tmp
+            n = min(n, total_candidates)
+            sel_groups = sorted_group_ids[:n]
+            sel_local = sorted_local_pos[:n]
+            for gi in range(len(prune_keys)):
+                mask = (sel_groups == gi)
+                if not mask.any():
+                    continue
+                local_positions = sel_local[mask]
+                flat_indices = prune_idx[gi][local_positions]
+                tmp[prune_keys[gi]].view(-1)[flat_indices] = 0
+            return tmp
+        def _measure(tmp):
             buf = io.BytesIO(); torch.save({"w": tmp, "m": quant_meta}, buf)
-            return len(_compress_quant_payload(buf.getvalue(), args.compressor)) + code_bytes_est, tmp
-        no_sz, _ = _try_prune(0)
+            return len(_compress_quant_payload(buf.getvalue(), args.compressor)) + code_bytes_est
+        no_sz = _measure(_apply_prune(0))
         target_bytes = int(target_mb * 1_000_000)  # decimal MB (cap = 16,000,000 bytes)
-        log0(f"selective_prune: {len(ones_info)} ±1 candidates, unpruned={no_sz/1e6:.2f}MB target={target_mb}MB")
+        log0(f"selective_prune: {total_candidates} ±1 candidates, unpruned={no_sz/1e6:.2f}MB target={target_mb}MB")
         if no_sz <= target_bytes:
             log0("selective_prune: already fits, no pruning needed")
         else:
-            full_sz, _ = _try_prune(len(ones_info))
+            full_sz = _measure(_apply_prune(total_candidates))
             log0(f"selective_prune: full ±1 prune={full_sz/1e6:.2f}MB")
             if full_sz > target_bytes:
                 log0("selective_prune: even full prune not enough, applying all")
-                _, quant_result = _try_prune(len(ones_info))
+                quant_result = _apply_prune(total_candidates)
             else:
-                lo, hi = 0, len(ones_info)
+                lo, hi = 0, total_candidates
                 while lo < hi:
                     mid = (lo + hi) // 2
-                    sz, _ = _try_prune(mid)
+                    sz = _measure(_apply_prune(mid))
                     if sz <= target_bytes: hi = mid
                     else: lo = mid + 1
-                log0(f"selective_prune: pruning {lo}/{len(ones_info)} ±1 values ({100*lo/len(ones_info):.1f}%) to fit {target_mb}MB")
-                _, quant_result = _try_prune(lo)
+                log0(f"selective_prune: pruning {lo}/{total_candidates} ±1 values ({100*lo/total_candidates:.1f}%) to fit {target_mb}MB")
+                quant_result = _apply_prune(lo)
     quant_buf = io.BytesIO()
     torch.save({"w": quant_result, "m": quant_meta}, quant_buf)
     quant_raw = quant_buf.getvalue()
