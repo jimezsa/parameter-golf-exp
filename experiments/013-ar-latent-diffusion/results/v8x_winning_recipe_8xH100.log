@@ -1,0 +1,76 @@
+W0417 08:22:49.163000 1119 torch/distributed/run.py:803] 
+W0417 08:22:49.163000 1119 torch/distributed/run.py:803] *****************************************
+W0417 08:22:49.163000 1119 torch/distributed/run.py:803] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0417 08:22:49.163000 1119 torch/distributed/run.py:803] *****************************************
+logs/99cacbd5-2795-461b-925f-9ba222dd1a77.txt
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_8192_bpe.model
+train_loader:dataset:fineweb10B_sp8192 train_shards:80
+val_loader:shards pattern=./data/datasets/fineweb10B_sp8192/fineweb_val_*.bin tokens:40540160
+model_params:36204632
+diffusion_aux:prob:0.03 weight:0.5000 start_frac:0.25 stop_frac:0.60 subsample:1.00 objective:latent_mse params:263168
+XSA:last_11 active_layers:[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+world_size:8 grad_accum_steps:1
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:8 num_kv_heads:4
+tie_embeddings:True embed_lr:0.03 head_lr:0.008 matrix_lr:0.045 scalar_lr:0.02
+quant_stack:compressor=brotli matrix_bits=6 embed_bits=8 matrix_clip_sigmas=12.85 embed_clip_sigmas=20.0 muon_row_normalize=True
+train_batch_tokens:786432 train_seq_len:2048 iterations:20000 warmup_steps:20 max_wallclock_seconds:600.000
+seed:1337
+gptq:reserving 12s for quant/export effective_wallclock_ms:588000
+warmup_step:1/20
+warmup_step:2/20
+warmup_step:3/20
+warmup_step:4/20
+warmup_step:5/20
+warmup_step:6/20
+warmup_step:7/20
+warmup_step:8/20
+warmup_step:9/20
+warmup_step:10/20
+warmup_step:11/20
+warmup_step:12/20
+warmup_step:13/20
+warmup_step:14/20
+warmup_step:15/20
+warmup_step:16/20
+warmup_step:17/20
+warmup_step:18/20
+warmup_step:19/20
+warmup_step:20/20
+step:0/20000 val_loss:9.00796645 val_bpb:3.48726453 train_time:0ms step_avg:0.01ms
+step:1/20000 train_loss:9.0082 train_time:133ms step_avg:133.09ms
+step:2/20000 train_loss:12.2516 train_time:166ms step_avg:83.10ms
+step:3/20000 train_loss:10.7501 train_time:268ms step_avg:89.26ms
+step:4/20000 train_loss:9.0359 train_time:369ms step_avg:92.29ms
+step:5/20000 train_loss:7.9619 train_time:471ms step_avg:94.19ms
+step:6/20000 train_loss:7.5577 train_time:576ms step_avg:95.94ms
+step:7/20000 train_loss:7.2341 train_time:688ms step_avg:98.22ms
+step:8/20000 train_loss:7.0764 train_time:793ms step_avg:99.09ms
+step:9/20000 train_loss:6.9719 train_time:894ms step_avg:99.36ms
+step:10/20000 train_loss:6.8490 train_time:1001ms step_avg:100.08ms
+step:500/20000 train_loss:3.3533 train_time:72616ms step_avg:145.23ms
+step:1000/20000 train_loss:3.2410 train_time:130530ms step_avg:130.53ms
+diffusion_startup:step:1151 elapsed_ms:147048 frac:0.25
+step:1500/20000 train_loss:3.1966 train_time:246321ms step_avg:164.21ms
+step:2000/20000 train_loss:3.1493 train_time:299017ms step_avg:149.51ms
+step:2500/20000 train_loss:3.1150 train_time:350678ms step_avg:140.27ms
+diffusion_cutoff:step:2521 elapsed_ms:352883 frac:0.60
+step:3000/20000 train_loss:3.0362 train_time:400897ms step_avg:133.63ms
+step:3500/20000 train_loss:2.9768 train_time:450912ms step_avg:128.83ms
+step:4000/20000 train_loss:3.0146 train_time:500911ms step_avg:125.23ms
+step:4000/20000 val_loss:2.94724345 val_bpb:1.14096978 train_time:500989ms step_avg:125.25ms
+swa:start step:4100
+late_qat:enabled step:4277 scale:0.1500
+step:4500/20000 train_loss:2.9071 train_time:551836ms step_avg:122.63ms
+step:4852/20000 val_loss:2.85193235 val_bpb:1.10407189 train_time:588074ms step_avg:121.20ms
+stopping_early: wallclock_cap train_time:588074ms step:4852/20000
+peak memory allocated: 49719 MiB reserved: 49894 MiB
+DIAGNOSTIC post_train val_loss:2.8519 val_bpb:1.1041 eval_time:1581ms
+export_excluding_training_only_params:262144
+Serialized model: 135398000 bytes
+Code size: 101739 bytes
+gptq:building non-banked model for Hessian collection...
+gptq:collecting hessians from 32 calibration batches...
+gptq:collected hessians for 66 layers
+selective_prune: 9687057 ±1 candidates, unpruned=17.09MB target=15.999MB
+selective_prune: full ±1 prune=14.00MB
