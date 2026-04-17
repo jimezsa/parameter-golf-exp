@@ -352,8 +352,10 @@ HP re-tuning on 8xH100 (10 min wallclock, ~5800 steps). All runs use 02 harness,
 | v13-8x | 0.020 | 0.00 | 0.667 | 1337 | 1.0963 | 103.42 | 5803 | [v13_8x_auxprob002.log](results/v13_8x_auxprob002.log) | DIFFUSION_AUX_PROB=0.02 (vs 0.03 default) — −0.0001 vs v6-8x, within noise. Lighter diffusion does not help on 8xH100. **Dead lever.** |
 | v14-8x | 0.020 | 0.00 | 0.667 | 1337 | 1.0965 | 103.89 | 5776 | [v14_8x_wd070.log](results/v14_8x_wd070.log) | MUON_WD=0.070 (vs 0.090 default) — +0.0001 vs v6-8x, within noise. Lower WD dead on 8xH100. **Dead lever.** |
 | v16-8x | 0.020 | 0.00 | 0.667 | 1337 | 1.0969 | 104.31 | 5753 | [v16_8x_03_prefetch.log](results/v16_8x_03_prefetch.log) | **03 bucketed+prefetch harness probe** — `train_gpt_03_bucketed_allreduce.py` (bucketed reduce + loader prefetch). +0.0005 vs v6-8x (within noise), +0.17ms/step, −9 steps. 120s comm-profile showed 10× less exposed comm vs 02, but full 600s run does not translate to meaningful gain. **Neutral — keep as optional harness, original 02 remains 8x default.** |
+| v17-8x-gptq | 0.020 | 0.00 | 0.667 | 1337 | 1.0971 (pre) / **1.1465** (post-rtrip) / **1.1293** (post-sw) | 103.99 | 5656 | [v17_8x_gptq.log](results/v17_8x_gptq.log) | **First full GPTQ pipeline completion for exp 013.** Pre-quant 1.0971 matches v6-8x. Post-quant roundtrip 1.1465 (gap 0.0494), sliding-window 1.1293 (gap 0.0322). Submission size 15,998,792 bytes (15.99MB, fits 16MB limit). Selective ±1 prune: 35.9% of candidates pruned. Uses old 8x recipe (MATRIX_LR=0.020, no MIN_LR). |
 
 **8xH100 best pre-quant: 1.0960** (v9-8x-retry, nominally) / **1.0964** (v6-8x, defensible default recipe).
+**8xH100 first post-quant: 1.1465 roundtrip / 1.1293 sliding-window** (v17-8x-gptq, old recipe). Quant gap 0.049/0.032. Submission size 15.99MB.
 
 **MATRIX_LR scan verdict:** 1xH100 peak (0.045) is far above 8xH100 peak (~0.020). With 7× more steps, the model converges further and needs a lower peak LR to avoid late-training oscillation. Full ramp {0.010, 0.015, 0.020, 0.025, 0.045} = {1.0997, 1.0973, 1.0975, 1.0975, 1.1007}. Plateau is 0.015–0.025; defensible pick is 0.020.
 
