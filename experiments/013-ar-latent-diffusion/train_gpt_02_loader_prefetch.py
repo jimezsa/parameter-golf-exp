@@ -2145,6 +2145,7 @@ def main() -> None:
     )
     log0(f"gptq:collecting hessians from {args.gptq_calib_batches} calibration batches...")
     calib_loader = ShuffledSequenceLoader(args, rank, world_size, device)
+    _t_hessian_start = time.perf_counter()
     hessians = collect_hessians(
         hessian_model,
         calib_loader,
@@ -2153,10 +2154,14 @@ def main() -> None:
         grad_accum_steps,
         num_batches=args.gptq_calib_batches,
     )
-    log0(f"gptq:collected hessians for {len(hessians)} layers")
+    _t_hessian_elapsed = time.perf_counter() - _t_hessian_start
+    log0(f"gptq:collected hessians for {len(hessians)} layers in {_t_hessian_elapsed:.1f}s")
     del hessian_model
     torch.cuda.empty_cache()
+    _t_quant_start = time.perf_counter()
     quant_result, quant_meta = mixed_quantize_int6(unbanked_sd, args, hessians=hessians)
+    _t_quant_elapsed = time.perf_counter() - _t_quant_start
+    log0(f"gptq:quantized {len(quant_meta)} layers in {_t_quant_elapsed:.1f}s")
     # NOVEL: Selective ±1 pruning by reconstruction error (vectorized)
     # Sort ±1 quantized values by their reconstruction error (scale²),
     # prune least-impactful first until artifact fits target size.
