@@ -348,6 +348,7 @@ HP re-tuning on 8xH100 (10 min wallclock, ~5800 steps). All runs use 02 harness,
 | v10-8x-gptq | 0.020 | 0.00 | 0.667 | 1337 | 1.0970 (pre) | 104.24 | 5642 | [v10_8x_gptq.log](results/v10_8x_gptq.log) | Full GPTQ run — pre-quant 1.0970, GPTQ killed per user directive. |
 | v11-8x | 0.020 | 0.00 | 0.667 | 1337 | 1.0967 | 104.07 | 5766 | [v11_8x_wd110.log](results/v11_8x_wd110.log) | WD=0.110 (vs 0.090 default) — +0.0003 vs v6-8x, within noise. **WD dead on 8xH100 too.** |
 | v10-8x-gptq-final | 0.020 | 0.00 | 0.667 | 1337 | KILLED | — | — | — | GPTQ re-run — killed per user directive (skip post-quant, continue iterations). |
+| v12-8x | 0.020 | 0.00 | 0.667 | 1337 | 1.0967 | 103.92 | 5775 | [v12_8x_lateqat010.log](results/v12_8x_lateqat010.log) | LATE_QAT_THRESHOLD=0.10 (vs 0.15 default) — +0.0003 vs v6-8x, within noise. late_qat enabled at step 5382 (vs ~5177 at default). **Dead on 8xH100 too.** |
 
 **8xH100 best pre-quant: 1.0960** (v9-8x-retry, nominally) / **1.0964** (v6-8x, defensible default recipe).
 
@@ -358,6 +359,8 @@ HP re-tuning on 8xH100 (10 min wallclock, ~5800 steps). All runs use 02 harness,
 **WARMDOWN_FRAC scan verdict:** Dead on both 1xH100 and 8xH100. 0.750 = 1.0960 vs 0.667 = 1.0964 (−0.0004, within noise).
 
 **WD=0.110 scan verdict:** Dead on 8xH100. v11-8x = 1.0967 vs v6-8x = 1.0964 (+0.0003, within noise). Consistent with 1xH100 result (5th dead lever).
+
+**LATE_QAT_THRESHOLD scan verdict (8xH100):** Dead. v12-8x (LATE_QAT_THRESHOLD=0.10) = 1.0967 vs v6-8x (0.15 default) = 1.0964 (+0.0003, within noise). Consistent with 1xH100 result (16th dead lever). QAT threshold is insensitive at both scales.
 
 ## Status
 
