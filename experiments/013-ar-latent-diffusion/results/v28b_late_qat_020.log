@@ -1,0 +1,13 @@
+diffusion_startup:step:200 elapsed_ms:150604 frac:0.25
+diffusion_cutoff:step:472 elapsed_ms:360359 frac:0.60
+step:500/20000 train_loss:3.2488 train_time:381278ms step_avg:762.56ms
+late_qat:enabled step:686 scale:0.1983
+swa:start step:700
+step:792/20000 val_loss:3.06909563 val_bpb:1.18835085 train_time:600284ms step_avg:757.93ms
+stopping_early: wallclock_cap train_time:600284ms step:792/20000
+peak memory allocated: 49906 MiB reserved: 49980 MiB
+DIAGNOSTIC post_train val_loss:3.0691 val_bpb:1.1884 eval_time:12458ms
+export_excluding_training_only_params:262144
+Serialized model: 135398000 bytes
+Code size: 101739 bytes
+skip_quant:enabled — skipping post-training quantization pipeline
