@@ -89,9 +89,9 @@ class Hyperparameters:
     diffusion_start_frac = float(os.environ.get("DIFFUSION_START_FRAC", 0.00))  # fraction of wallclock before which diffusion is disabled (0.0 = always on)
     diffusion_subsample_frac = float(os.environ.get("DIFFUSION_SUBSAMPLE_FRAC", 1.00))  # optional fraction of seq positions for latent MSE loss
     # GPTQ calibration
-    gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 32))
+    gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 256))
     gptq_block_size = int(os.environ.get("GPTQ_BLOCK_SIZE", 128))
-    gptq_reserve_seconds = float(os.environ.get("GPTQ_RESERVE_SECONDS", 12.0))
+    gptq_reserve_seconds = float(os.environ.get("GPTQ_RESERVE_SECONDS", 45.0))
     screen_warmup_steps = int(os.environ.get("SCREEN_WARMUP_STEPS", 2))
     comm_profile = bool(int(os.environ.get("COMM_PROFILE", "0")))
     comm_profile_log_every = int(os.environ.get("COMM_PROFILE_LOG_EVERY", 200))
@@ -1230,7 +1230,10 @@ def quantize_int6_per_row(t: Tensor, clip_range: int = 31) -> tuple[Tensor, Tens
     q = torch.clamp(torch.round(t32 / scale.float()), -clip_range, clip_range).to(torch.int8)
     return q, scale
 
-def gptq_quantize_weight(weight: Tensor, hessian: Tensor, clip_sigmas: float, clip_range: int, block_size: int = 128):
+def gptq_quantize_weight(weight: Tensor, hessian: Tensor, clip_range: int, block_size: int = 128):
+    """Full GPTQ: Hessian-aware quantization with percentile search for optimal clip scale.
+    Matches dexhunter AllInt6 approach: tries 5 percentile candidates, runs full block-wise
+    GPTQ for each, picks best by reconstruction MSE."""
     t32 = weight.float()
     rows, cols = t32.shape
     H = hessian.float().clone()
@@ -1246,26 +1249,40 @@ def gptq_quantize_weight(weight: Tensor, hessian: Tensor, clip_sigmas: float, cl
     Hinv = torch.linalg.cholesky(H)
     Hinv = torch.cholesky_inverse(Hinv)
     Hinv = torch.linalg.cholesky(Hinv, upper=True)
-    scale = (clip_sigmas * t32.std(dim=1) / clip_range).clamp_min(1e-10).to(torch.float16)
-    scale_f = scale.float()
-    Q = torch.zeros(rows, cols, dtype=torch.int8)
-    W_work = W.clone()
-    for i1 in range(0, cols, block_size):
-        i2 = min(i1 + block_size, cols)
-        W_block = W_work[:, i1:i2].clone()
-        Hinv_block = Hinv[i1:i2, i1:i2]
-        err_block = torch.zeros(rows, i2 - i1)
-        for j in range(i2 - i1):
-            w_col = W_block[:, j]
-            d = Hinv_block[j, j]
-            q_col = torch.clamp(torch.round(w_col / scale_f), -clip_range, clip_range)
-            Q[:, i1 + j] = q_col.to(torch.int8)
-            err = (w_col - q_col.float() * scale_f) / d
-            err_block[:, j] = err
-            W_block[:, j:] -= err.unsqueeze(1) * Hinv_block[j, j:].unsqueeze(0)
-        if i2 < cols:
-            W_work[:, i2:] -= err_block @ Hinv[i1:i2, i2:]
-    return Q[:, inv_perm], scale
+    best_q = None; best_scale = None; best_err = float('inf')
+    for pct in [0.9990, 0.9995, 0.9999, 0.99999, 1.0]:
+        if pct < 1.0:
+            row_clip = torch.quantile(t32.abs(), pct, dim=1)
+        else:
+            row_clip = t32.abs().amax(dim=1)
+        s = (row_clip / clip_range).clamp_min(1.0 / clip_range).to(torch.float16)
+        sf = s.float()
+        Q = torch.zeros_like(W, dtype=torch.int8)
+        W_work = W.clone()
+        for i1 in range(0, cols, block_size):
+            i2 = min(i1 + block_size, cols)
+            count = i2 - i1
+            W1 = W_work[:, i1:i2].clone()
+            Q1 = torch.zeros(rows, count, dtype=torch.int8)
+            Err1 = torch.zeros(rows, count)
+            Hinv1 = Hinv[i1:i2, i1:i2]
+            for i in range(count):
+                w = W1[:, i]
+                d = Hinv1[i, i]
+                q = torch.clamp(torch.round(w / sf), -clip_range, clip_range).to(torch.int8)
+                Q1[:, i] = q
+                err = (w - q.float() * sf) / d
+                W1[:, i:] -= err.unsqueeze(1) * Hinv1[i, i:].unsqueeze(0)
+                Err1[:, i] = err
+            Q[:, i1:i2] = Q1
+            if i2 < cols:
+                W_work[:, i2:] -= Err1 @ Hinv[i1:i2, i2:]
+        recon = Q.float() * sf[:, None]
+        mse = (W - recon).pow(2).mean().item()
+        if mse < best_err:
+            best_q, best_scale, best_err = Q, s, mse
+    best_q = best_q[:, inv_perm]
+    return best_q, best_scale
 
 def _unbank_state_dict(sd: dict[str, Tensor], num_layers: int) -> dict[str, Tensor]:
     """Convert 3D bank tensors into individual 2D tensors with standard names."""
@@ -1544,19 +1561,11 @@ def mixed_quantize_int6(state_dict: dict[str, Tensor], args: Hyperparameters, he
             result[name + ".scale"] = s
             meta[name] = "fallback_int8"
             continue
-        if cat == "embed":
-            bits = args.embed_bits
-            clip_sigmas = args.embed_clip_sigmas
-        else:
-            bits = args.matrix_bits
-            clip_sigmas = args.matrix_clip_sigmas
-            if any(name.startswith(f"blocks.{idx}.") for idx in late_k_layers):
-                clip_sigmas *= 1.0
+        bits = args.embed_bits if cat == "embed" else args.matrix_bits
         clip_range = 2 ** (bits - 1) - 1
         q, s = gptq_quantize_weight(
             t,
             hessians[name],
-            clip_sigmas=clip_sigmas,
             clip_range=clip_range,
             block_size=args.gptq_block_size,
         )
@@ -1845,8 +1854,8 @@ def main() -> None:
     )
     log0(
         f"quant_stack:compressor={args.compressor} matrix_bits={args.matrix_bits} "
-        f"embed_bits={args.embed_bits} matrix_clip_sigmas={args.matrix_clip_sigmas} "
-        f"embed_clip_sigmas={args.embed_clip_sigmas} muon_row_normalize={args.muon_row_normalize}"
+        f"embed_bits={args.embed_bits} gptq_scale=percentile_search "
+        f"calib_batches={args.gptq_calib_batches} muon_row_normalize={args.muon_row_normalize}"
     )
     log0(
         f"train_batch_tokens:{args.train_batch_tokens} train_seq_len:{args.train_seq_len} "
