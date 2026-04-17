@@ -345,9 +345,9 @@ HP re-tuning on 8xH100 (10 min wallclock, ~5800 steps). All runs use 02 harness,
 | v8-8x | 0.020 | 0.02 | 0.667 | 1337 | 1.0964 | 104.14 | 5762 | [v8_8x_minlr002.log](results/v8_8x_minlr002.log) | MIN_LR bracket — ties v6-8x exactly, plateau 0.00–0.02 confirmed |
 | v9-8x | 0.020 | 0.00 | 0.750 | 1337 | CRASH | — | ~1500 | — | NCCL ALLREDUCE timeout, killed |
 | v9-8x-retry | 0.020 | 0.00 | 0.750 | 1337 | 1.0960 | 104.04 | 5768 | [v9_8x_warmdown075.log](results/v9_8x_warmdown075.log) | WARMDOWN_FRAC=0.750 — −0.0004 vs v6-8x, within noise. Dead lever. |
-| v10-8x-gptq | 0.020 | 0.00 | 0.667 | 1337 | 1.0970 (pre) | 104.24 | 5642 | — | Full GPTQ run — pre-quant OK, GPTQ pipeline killed by SIGTERM (external). −12s budget reserve = fewer steps vs SKIP_QUANT runs. Re-run as v10-8x-gptq-final. |
+| v10-8x-gptq | 0.020 | 0.00 | 0.667 | 1337 | 1.0970 (pre) | 104.24 | 5642 | [v10_8x_gptq.log](results/v10_8x_gptq.log) | Full GPTQ run — pre-quant 1.0970, GPTQ killed per user directive. |
 | v11-8x | 0.020 | 0.00 | 0.667 | 1337 | 1.0967 | 104.07 | 5766 | [v11_8x_wd110.log](results/v11_8x_wd110.log) | WD=0.110 (vs 0.090 default) — +0.0003 vs v6-8x, within noise. **WD dead on 8xH100 too.** |
-| v10-8x-gptq-final | 0.020 | 0.00 | 0.667 | 1337 | RUNNING | — | — | — | Full GPTQ submission run — re-run with GPTQ enabled, awaiting completion. |
+| v10-8x-gptq-final | 0.020 | 0.00 | 0.667 | 1337 | KILLED | — | — | — | GPTQ re-run — killed per user directive (skip post-quant, continue iterations). |
 
 **8xH100 best pre-quant: 1.0960** (v9-8x-retry, nominally) / **1.0964** (v6-8x, defensible default recipe).
 

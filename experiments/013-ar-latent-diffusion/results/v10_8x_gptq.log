@@ -1,0 +1,118 @@
+W0417 12:19:16.932000 62981 torch/distributed/run.py:803] 
+W0417 12:19:16.932000 62981 torch/distributed/run.py:803] *****************************************
+W0417 12:19:16.932000 62981 torch/distributed/run.py:803] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0417 12:19:16.932000 62981 torch/distributed/run.py:803] *****************************************
+logs/a02fb1cc-5628-4d25-bd02-f062c1d381f6.txt
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_8192_bpe.model
+train_loader:dataset:fineweb10B_sp8192 train_shards:80
+val_loader:shards pattern=./data/datasets/fineweb10B_sp8192/fineweb_val_*.bin tokens:40540160
+model_params:36204632
+diffusion_aux:prob:0.03 weight:0.5000 start_frac:0.25 stop_frac:0.60 subsample:1.00 objective:latent_mse params:263168
+XSA:last_11 active_layers:[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+world_size:8 grad_accum_steps:1
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:8 num_kv_heads:4
+tie_embeddings:True embed_lr:0.03 head_lr:0.008 matrix_lr:0.02 scalar_lr:0.02
+quant_stack:compressor=brotli matrix_bits=6 embed_bits=8 matrix_clip_sigmas=12.85 embed_clip_sigmas=20.0 muon_row_normalize=True
+train_batch_tokens:786432 train_seq_len:2048 iterations:20000 warmup_steps:20 max_wallclock_seconds:600.000
+seed:1337
+gptq:reserving 12s for quant/export effective_wallclock_ms:588000
+warmup_step:1/20
+warmup_step:2/20
+warmup_step:3/20
+warmup_step:4/20
+warmup_step:5/20
+warmup_step:6/20
+warmup_step:7/20
+warmup_step:8/20
+warmup_step:9/20
+warmup_step:10/20
+warmup_step:11/20
+warmup_step:12/20
+warmup_step:13/20
+warmup_step:14/20
+warmup_step:15/20
+warmup_step:16/20
+warmup_step:17/20
+warmup_step:18/20
+warmup_step:19/20
+warmup_step:20/20
+step:0/20000 val_loss:9.00796645 val_bpb:3.48726453 train_time:0ms step_avg:0.01ms
+step:1/20000 train_loss:9.0082 train_time:140ms step_avg:139.60ms
+step:2/20000 train_loss:12.3254 train_time:178ms step_avg:88.92ms
+step:3/20000 train_loss:11.0269 train_time:282ms step_avg:93.96ms
+step:4/20000 train_loss:9.3986 train_time:387ms step_avg:96.65ms
+step:5/20000 train_loss:8.3055 train_time:489ms step_avg:97.85ms
+step:6/20000 train_loss:7.7026 train_time:592ms step_avg:98.66ms
+step:7/20000 train_loss:7.2497 train_time:696ms step_avg:99.50ms
+step:8/20000 train_loss:7.0811 train_time:802ms step_avg:100.20ms
+step:9/20000 train_loss:6.9854 train_time:903ms step_avg:100.33ms
+step:10/20000 train_loss:6.9453 train_time:1008ms step_avg:100.84ms
+step:500/20000 train_loss:3.3288 train_time:50002ms step_avg:100.00ms
+step:1000/20000 train_loss:3.1949 train_time:100009ms step_avg:100.01ms
+diffusion_startup:step:1470 elapsed_ms:147081 frac:0.25
+step:1500/20000 train_loss:3.1803 train_time:150009ms step_avg:100.01ms
+step:2000/20000 train_loss:3.1362 train_time:219835ms step_avg:109.92ms
+step:2500/20000 train_loss:3.1037 train_time:270583ms step_avg:108.23ms
+step:3000/20000 train_loss:3.0270 train_time:322073ms step_avg:107.36ms
+diffusion_cutoff:step:3298 elapsed_ms:352840 frac:0.60
+step:3500/20000 train_loss:2.9766 train_time:372915ms step_avg:106.55ms
+step:4000/20000 train_loss:3.0331 train_time:422853ms step_avg:105.71ms
+step:4000/20000 val_loss:2.96295360 val_bpb:1.14705167 train_time:422928ms step_avg:105.73ms
+step:4500/20000 train_loss:2.9451 train_time:472659ms step_avg:105.04ms
+swa:start step:4900
+step:5000/20000 train_loss:2.9333 train_time:522814ms step_avg:104.56ms
+late_qat:enabled step:5061 scale:0.1500
+step:5500/20000 train_loss:2.8418 train_time:573608ms step_avg:104.29ms
+step:5642/20000 val_loss:2.83369405 val_bpb:1.09701127 train_time:588100ms step_avg:104.24ms
+stopping_early: wallclock_cap train_time:588100ms step:5642/20000
+peak memory allocated: 49712 MiB reserved: 49884 MiB
+DIAGNOSTIC post_train val_loss:2.8337 val_bpb:1.0970 eval_time:1581ms
+export_excluding_training_only_params:262144
+Serialized model: 135398000 bytes
+Code size: 101739 bytes
+gptq:building non-banked model for Hessian collection...
+gptq:collecting hessians from 32 calibration batches...
+gptq:collected hessians for 66 layers
+selective_prune: 9683884 ±1 candidates, unpruned=17.09MB target=15.999MB
+selective_prune: full ±1 prune=14.01MB
+W0417 12:39:59.874000 62981 torch/distributed/elastic/multiprocessing/api.py:908] Sending process 63048 closing signal SIGTERM
+W0417 12:39:59.877000 62981 torch/distributed/elastic/multiprocessing/api.py:908] Sending process 63049 closing signal SIGTERM
+W0417 12:39:59.879000 62981 torch/distributed/elastic/multiprocessing/api.py:908] Sending process 63050 closing signal SIGTERM
+W0417 12:39:59.885000 62981 torch/distributed/elastic/multiprocessing/api.py:908] Sending process 63051 closing signal SIGTERM
+W0417 12:39:59.886000 62981 torch/distributed/elastic/multiprocessing/api.py:908] Sending process 63052 closing signal SIGTERM
+W0417 12:39:59.897000 62981 torch/distributed/elastic/multiprocessing/api.py:908] Sending process 63054 closing signal SIGTERM
+W0417 12:39:59.899000 62981 torch/distributed/elastic/multiprocessing/api.py:908] Sending process 63055 closing signal SIGTERM
+E0417 12:40:01.241000 62981 torch/distributed/elastic/multiprocessing/api.py:882] failed (exitcode: -15) local_rank: 5 (pid: 63053) of binary: /usr/local/bin/python
+Traceback (most recent call last):
+  File "/usr/local/bin/torchrun", line 7, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 357, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/run.py", line 936, in main
+    run(args)
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/run.py", line 927, in run
+    elastic_launch(
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/launcher/api.py", line 156, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/launcher/api.py", line 293, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+=======================================================
+train_gpt_02_loader_prefetch.py FAILED
+-------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+-------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-04-17_12:39:59
+  host      : a271a1f443bb
+  rank      : 5 (local_rank: 5)
+  exitcode  : -15 (pid: 63053)
+  error_file: <N/A>
+  traceback : Signal 15 (SIGTERM) received by PID 63053
+=======================================================
