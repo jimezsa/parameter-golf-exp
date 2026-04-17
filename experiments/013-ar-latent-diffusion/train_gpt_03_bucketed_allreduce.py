@@ -91,6 +91,8 @@ class Hyperparameters:
     gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 32))
     gptq_block_size = int(os.environ.get("GPTQ_BLOCK_SIZE", 128))
     gptq_reserve_seconds = float(os.environ.get("GPTQ_RESERVE_SECONDS", 12.0))
+    comm_profile = bool(int(os.environ.get("COMM_PROFILE", "0")))
+    comm_profile_log_every = int(os.environ.get("COMM_PROFILE_LOG_EVERY", 200))
     matrix_bits = int(os.environ.get("MATRIX_BITS", 6))
     embed_bits = int(os.environ.get("EMBED_BITS", 8))
     matrix_clip_sigmas = float(os.environ.get("MATRIX_CLIP_SIGMAS", 12.85))
@@ -148,6 +150,29 @@ class Muon(torch.optim.Optimizer):
                  row_normalize=row_normalize),
         )
         self._built = False
+        self._comm_stats = self._zero_comm_stats()
+
+    @staticmethod
+    def _zero_comm_stats() -> dict[str, float | int]:
+        return {
+            "bank_launch_ms": 0.0,
+            "bank_launch_calls": 0,
+            "bank_launch_bytes": 0,
+            "bank_rs_wait_ms": 0.0,
+            "bank_rs_wait_calls": 0,
+            "bank_rs_wait_bytes": 0,
+            "bank_ag_launch_ms": 0.0,
+            "bank_ag_launch_calls": 0,
+            "bank_ag_launch_bytes": 0,
+            "bank_ag_wait_ms": 0.0,
+            "bank_ag_wait_calls": 0,
+            "bank_ag_wait_bytes": 0,
+        }
+
+    def drain_comm_stats(self) -> dict[str, float | int]:
+        stats = self._comm_stats
+        self._comm_stats = self._zero_comm_stats()
+        return stats
 
     def _build(self):
         self._distributed = dist.is_available() and dist.is_initialized()
@@ -180,6 +205,7 @@ class Muon(torch.optim.Optimizer):
         """Phase 1: launch async reduce-scatter for all banks. Call right after backward."""
         if not self._built:
             self._build()
+        self._comm_stats = self._zero_comm_stats()
         if not self._distributed:
             return
         self._rs_futures = []
@@ -192,7 +218,11 @@ class Muon(torch.optim.Optimizer):
             pg[:m['B']].copy_(p.grad.bfloat16())
             if pg.shape[0] > m['B']:
                 pg[m['B']:].zero_()
+            t_rs_launch = time.perf_counter()
             fut = dist.reduce_scatter_tensor(m['shard'], pg, op=dist.ReduceOp.AVG, async_op=True)
+            self._comm_stats["bank_launch_ms"] += 1000.0 * (time.perf_counter() - t_rs_launch)
+            self._comm_stats["bank_launch_calls"] += 1
+            self._comm_stats["bank_launch_bytes"] += pg.numel() * pg.element_size()
             self._rs_futures.append(fut)
 
     @torch.no_grad()
@@ -225,7 +255,11 @@ class Muon(torch.optim.Optimizer):
                     continue
 
                 if prev_ag_handle is not None:
+                    t_ag_wait = time.perf_counter()
                     prev_ag_handle.wait()
+                    self._comm_stats["bank_ag_wait_ms"] += 1000.0 * (time.perf_counter() - t_ag_wait)
+                    self._comm_stats["bank_ag_wait_calls"] += 1
+                    self._comm_stats["bank_ag_wait_bytes"] += prev_m['full_update'].numel() * prev_m['full_update'].element_size()
                     pp = prev_m['p']
                     upd = prev_m['full_update'][:prev_m['B']]
                     if wd > 0.0:
@@ -233,7 +267,11 @@ class Muon(torch.optim.Optimizer):
                     pp.add_(upd.to(dtype=pp.dtype), alpha=-lr * prev_m['scale'])
 
                 if sharded and self._rs_futures[i] is not None:
+                    t_rs_wait = time.perf_counter()
                     self._rs_futures[i].wait()
+                    self._comm_stats["bank_rs_wait_ms"] += 1000.0 * (time.perf_counter() - t_rs_wait)
+                    self._comm_stats["bank_rs_wait_calls"] += 1
+                    self._comm_stats["bank_rs_wait_bytes"] += m['padded_grad'].numel() * m['padded_grad'].element_size()
                     g = m['shard']
                     buf = m['shard_mom']
                 else:
@@ -255,8 +293,12 @@ class Muon(torch.optim.Optimizer):
                 update = zeropower_via_newtonschulz5(update, steps=backend_steps)
 
                 if sharded:
+                    t_ag_launch = time.perf_counter()
                     prev_ag_handle = dist.all_gather_into_tensor(
                         m['full_update'], update, async_op=True)
+                    self._comm_stats["bank_ag_launch_ms"] += 1000.0 * (time.perf_counter() - t_ag_launch)
+                    self._comm_stats["bank_ag_launch_calls"] += 1
+                    self._comm_stats["bank_ag_launch_bytes"] += m['full_update'].numel() * m['full_update'].element_size()
                     prev_m = m
                 else:
                     if wd > 0.0:
@@ -264,7 +306,11 @@ class Muon(torch.optim.Optimizer):
                     p.add_(update.to(dtype=p.dtype), alpha=-lr * m['scale'])
 
             if prev_ag_handle is not None:
+                t_ag_wait = time.perf_counter()
                 prev_ag_handle.wait()
+                self._comm_stats["bank_ag_wait_ms"] += 1000.0 * (time.perf_counter() - t_ag_wait)
+                self._comm_stats["bank_ag_wait_calls"] += 1
+                self._comm_stats["bank_ag_wait_bytes"] += prev_m['full_update'].numel() * prev_m['full_update'].element_size()
                 pp = prev_m['p']
                 upd = prev_m['full_update'][:prev_m['B']]
                 if wd > 0.0:
@@ -280,8 +326,23 @@ class ReplicatedGradBucketReducer:
     def __init__(self, params: list[Tensor]):
         self.params = list(params)
         self._buffers: dict[tuple[torch.device, torch.dtype], Tensor] = {}
+        self._comm_stats = self._zero_comm_stats()
+
+    @staticmethod
+    def _zero_comm_stats() -> dict[str, float | int]:
+        return {
+            "replicated_ms": 0.0,
+            "replicated_calls": 0,
+            "replicated_bytes": 0,
+        }
+
+    def drain_comm_stats(self) -> dict[str, float | int]:
+        stats = self._comm_stats
+        self._comm_stats = self._zero_comm_stats()
+        return stats
 
     def all_reduce_average(self) -> None:
+        self._comm_stats = self._zero_comm_stats()
         if not (dist.is_available() and dist.is_initialized()):
             return
         buckets: dict[tuple[torch.device, torch.dtype], list[Tensor]] = {}
@@ -306,9 +367,107 @@ class ReplicatedGradBucketReducer:
                 flat[offset:offset + numel].copy_(grad.reshape(-1))
                 views.append((p, offset, offset + numel))
                 offset += numel
+            t_reduce = time.perf_counter()
             dist.all_reduce(flat, op=dist.ReduceOp.AVG)
+            self._comm_stats["replicated_ms"] += 1000.0 * (time.perf_counter() - t_reduce)
+            self._comm_stats["replicated_calls"] += 1
+            self._comm_stats["replicated_bytes"] += flat.numel() * flat.element_size()
             for p, start, end in views:
                 p.grad.copy_(flat[start:end].view_as(p.grad))
+
+class StepCommProfiler:
+    def __init__(
+        self,
+        enabled: bool,
+        log_every: int,
+        reducer_name: str,
+        replicated_params: list[Tensor],
+        bank_params: list[Tensor],
+    ):
+        self.enabled = enabled
+        self.log_every = max(log_every, 1)
+        self.reducer_name = reducer_name
+        self.replicated_param_count = len(replicated_params)
+        self.bank_param_count = len(bank_params)
+        self.replicated_payload_bytes = sum(int(p.numel()) * p.element_size() for p in replicated_params)
+        self.bank_payload_bytes = sum(int(p.numel()) * p.element_size() for p in bank_params)
+        self._reset_window()
+
+    def _reset_window(self) -> None:
+        self.window_steps = 0
+        self.step_ms = 0.0
+        self.replicated_ms = 0.0
+        self.replicated_calls = 0
+        self.replicated_bytes = 0
+        self.bank_launch_ms = 0.0
+        self.bank_launch_calls = 0
+        self.bank_launch_bytes = 0
+        self.bank_rs_wait_ms = 0.0
+        self.bank_rs_wait_calls = 0
+        self.bank_rs_wait_bytes = 0
+        self.bank_ag_launch_ms = 0.0
+        self.bank_ag_launch_calls = 0
+        self.bank_ag_launch_bytes = 0
+        self.bank_ag_wait_ms = 0.0
+        self.bank_ag_wait_calls = 0
+        self.bank_ag_wait_bytes = 0
+
+    def log_static(self, log0) -> None:
+        if not self.enabled:
+            return
+        log0(
+            f"comm_profile:enabled reducer:{self.reducer_name} log_every:{self.log_every} "
+            f"replicated_params:{self.replicated_param_count} replicated_payload_mb:{self.replicated_payload_bytes / 1e6:.2f} "
+            f"bank_params:{self.bank_param_count} bank_payload_mb:{self.bank_payload_bytes / 1e6:.2f}"
+        )
+
+    def record_step(self, step_ms: float) -> None:
+        if not self.enabled:
+            return
+        self.window_steps += 1
+        self.step_ms += step_ms
+
+    def record_replicated(self, stats: dict[str, float | int]) -> None:
+        if not self.enabled:
+            return
+        self.replicated_ms += float(stats["replicated_ms"])
+        self.replicated_calls += int(stats["replicated_calls"])
+        self.replicated_bytes += int(stats["replicated_bytes"])
+
+    def record_muon(self, stats: dict[str, float | int]) -> None:
+        if not self.enabled:
+            return
+        self.bank_launch_ms += float(stats["bank_launch_ms"])
+        self.bank_launch_calls += int(stats["bank_launch_calls"])
+        self.bank_launch_bytes += int(stats["bank_launch_bytes"])
+        self.bank_rs_wait_ms += float(stats["bank_rs_wait_ms"])
+        self.bank_rs_wait_calls += int(stats["bank_rs_wait_calls"])
+        self.bank_rs_wait_bytes += int(stats["bank_rs_wait_bytes"])
+        self.bank_ag_launch_ms += float(stats["bank_ag_launch_ms"])
+        self.bank_ag_launch_calls += int(stats["bank_ag_launch_calls"])
+        self.bank_ag_launch_bytes += int(stats["bank_ag_launch_bytes"])
+        self.bank_ag_wait_ms += float(stats["bank_ag_wait_ms"])
+        self.bank_ag_wait_calls += int(stats["bank_ag_wait_calls"])
+        self.bank_ag_wait_bytes += int(stats["bank_ag_wait_bytes"])
+
+    def maybe_log(self, step: int, log0, force: bool = False) -> None:
+        if not self.enabled or self.window_steps == 0:
+            return
+        if not force and step % self.log_every != 0:
+            return
+        exposed_comm_ms = self.replicated_ms + self.bank_rs_wait_ms + self.bank_ag_wait_ms
+        avg_step_ms = self.step_ms / self.window_steps
+        log0(
+            f"comm_profile:step:{step} window_steps:{self.window_steps} avg_step_ms:{avg_step_ms:.2f} "
+            f"exposed_comm_ms:{exposed_comm_ms / self.window_steps:.2f} "
+            f"exposed_comm_pct:{100.0 * exposed_comm_ms / max(self.step_ms, 1e-9):.1f} "
+            f"replicated_ms:{self.replicated_ms / self.window_steps:.2f} replicated_calls:{self.replicated_calls / self.window_steps:.1f} "
+            f"replicated_payload_mb:{self.replicated_bytes / self.window_steps / 1e6:.2f} "
+            f"bank_rs_wait_ms:{self.bank_rs_wait_ms / self.window_steps:.2f} bank_ag_wait_ms:{self.bank_ag_wait_ms / self.window_steps:.2f} "
+            f"bank_launch_ms:{self.bank_launch_ms / self.window_steps:.2f} bank_ag_launch_ms:{self.bank_ag_launch_ms / self.window_steps:.2f} "
+            f"bank_rs_calls:{self.bank_rs_wait_calls / self.window_steps:.1f} bank_ag_calls:{self.bank_ag_wait_calls / self.window_steps:.1f}"
+        )
+        self._reset_window()
 
 # --- Tokenizer evaluation helpers ---
 
@@ -1648,6 +1807,13 @@ def main() -> None:
     optimizers: list[torch.optim.Optimizer] = [optimizer_tok, optimizer_muon, optimizer_scalar]
     if optimizer_head is not None:
         optimizers.append(optimizer_head)
+    comm_profiler = StepCommProfiler(
+        enabled=args.comm_profile,
+        log_every=args.comm_profile_log_every,
+        reducer_name="bucketed",
+        replicated_params=replicated_params,
+        bank_params=matrix_params,
+    )
     n_params = sum(p.numel() for p in base_model.parameters())
     diffusion_params = (
         base_model.mask_embed.numel()
@@ -1681,6 +1847,7 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
+    comm_profiler.log_static(log0)
     if args.weight_share:
         log0(f"weight_share:enabled (2x effective depth = {args.num_layers * 2} layers from {args.num_layers} physical)")
     if args.recurrence_depth > 1:
@@ -1690,9 +1857,12 @@ def main() -> None:
         for opt in optimizers:
             opt.zero_grad(set_to_none=True)
     max_wallclock_ms = 1000.0 * args.max_wallclock_seconds if args.max_wallclock_seconds > 0 else None
-    if max_wallclock_ms is not None and args.gptq_reserve_seconds > 0:
-        max_wallclock_ms = max(max_wallclock_ms - 1000.0 * args.gptq_reserve_seconds, 0.0)
-        log0(f"gptq:reserving {args.gptq_reserve_seconds:.0f}s for quant/export effective_wallclock_ms:{max_wallclock_ms:.0f}")
+    effective_gptq_reserve_seconds = 0.0 if args.skip_quant else args.gptq_reserve_seconds
+    if max_wallclock_ms is not None and effective_gptq_reserve_seconds > 0:
+        max_wallclock_ms = max(max_wallclock_ms - 1000.0 * effective_gptq_reserve_seconds, 0.0)
+        log0(f"gptq:reserving {effective_gptq_reserve_seconds:.0f}s for quant/export effective_wallclock_ms:{max_wallclock_ms:.0f}")
+    elif max_wallclock_ms is not None and args.skip_quant and args.gptq_reserve_seconds > 0:
+        log0(f"gptq:reserve_skipped skip_quant:enabled effective_wallclock_ms:{max_wallclock_ms:.0f}")
     def lr_mul(step: int, elapsed_ms: float) -> float:
         if args.warmdown_iters <= 0 and args.warmdown_frac <= 0:
             return 1.0
@@ -1792,6 +1962,7 @@ def main() -> None:
         if args.late_qat_threshold > 0 and scale < args.late_qat_threshold and not CastedLinear._qat_enabled:
             CastedLinear._qat_enabled = True
             log0(f"late_qat:enabled step:{step} scale:{scale:.4f}")
+        step_wall_t0 = time.perf_counter()
         zero_grad_all()
         train_loss = torch.zeros((), device=device)
         for micro_step in range(grad_accum_steps):
@@ -1829,14 +2000,17 @@ def main() -> None:
         # Phase 2: All-reduce non-bank grads + step Adam (while bank RS is in-flight)
         if distributed:
             replicated_grad_reducer.all_reduce_average()
+        comm_profiler.record_replicated(replicated_grad_reducer.drain_comm_stats())
         optimizer_tok.step()
         optimizer_scalar.step()
         if optimizer_head is not None:
             optimizer_head.step()
         # Phase 3: Wait for RS, local NS5, all-gather (banks processed last)
         optimizer_muon.step()
+        comm_profiler.record_muon(optimizer_muon.drain_comm_stats())
         zero_grad_all()
         step += 1
+        comm_profiler.record_step(1000.0 * (time.perf_counter() - step_wall_t0))
         approx_training_time_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
         if args.swa_enabled and scale < 0.2 and step % args.swa_every == 0:
             if swa_state is None:
@@ -1863,6 +2037,8 @@ def main() -> None:
             reached_cap = bool(reached_cap_tensor.item())
         if stop_after_step is None and reached_cap:
             stop_after_step = step
+        comm_profiler.maybe_log(step, log0, force=stop_after_step is not None)
+    comm_profiler.maybe_log(step, log0, force=True)
     log0(
         f"peak memory allocated: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB "
         f"reserved: {torch.cuda.max_memory_reserved() // 1024 // 1024} MiB"
