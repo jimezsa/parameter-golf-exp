@@ -351,6 +351,7 @@ HP re-tuning on 8xH100 (10 min wallclock, ~5800 steps). All runs use 02 harness,
 | v12-8x | 0.020 | 0.00 | 0.667 | 1337 | 1.0967 | 103.92 | 5775 | [v12_8x_lateqat010.log](results/v12_8x_lateqat010.log) | LATE_QAT_THRESHOLD=0.10 (vs 0.15 default) — +0.0003 vs v6-8x, within noise. late_qat enabled at step 5382 (vs ~5177 at default). **Dead on 8xH100 too.** |
 | v13-8x | 0.020 | 0.00 | 0.667 | 1337 | 1.0963 | 103.42 | 5803 | [v13_8x_auxprob002.log](results/v13_8x_auxprob002.log) | DIFFUSION_AUX_PROB=0.02 (vs 0.03 default) — −0.0001 vs v6-8x, within noise. Lighter diffusion does not help on 8xH100. **Dead lever.** |
 | v14-8x | 0.020 | 0.00 | 0.667 | 1337 | 1.0965 | 103.89 | 5776 | [v14_8x_wd070.log](results/v14_8x_wd070.log) | MUON_WD=0.070 (vs 0.090 default) — +0.0001 vs v6-8x, within noise. Lower WD dead on 8xH100. **Dead lever.** |
+| v16-8x | 0.020 | 0.00 | 0.667 | 1337 | 1.0972 | 105.60 | 5683 | [v16_8x_03_prefetch.log](results/v16_8x_03_prefetch.log) | **03 bucketed+prefetch harness probe** — `train_gpt_03_bucketed_allreduce.py` (bucketed reduce + loader prefetch). +0.0008 vs v6-8x (within noise), +1.46ms/step slower, −79 steps. 120s comm-profile showed 10× less exposed comm vs 02, but full 600s run does not translate to throughput gain vs original harness. **Not promoted — original harness remains 8x default.** |
 
 **8xH100 best pre-quant: 1.0960** (v9-8x-retry, nominally) / **1.0964** (v6-8x, defensible default recipe).
 
