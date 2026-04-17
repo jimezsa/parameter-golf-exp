@@ -1,8 +1,8 @@
-# Experiment 014: AR Self-Gen GPTQ Baseline
+# Experiment 014: AR Latent Baseline
 
 ## Purpose
 
-Exp 014 pulls the AR self-gen GPTQ lane out of Exp 013 and makes it the clean baseline. Training keeps the proven loader-prefetch harness, but the quantization and diffusion-stability path changes:
+Exp 014 keeps the `ar-latent` naming while pulling the new quantization lane out of Exp 013 into a clean baseline. Training keeps the proven loader-prefetch harness, but the quantization and diffusion-stability path changes:
 
 - GPTQ calibration uses self-generated AR trajectories instead of clean teacher-forced batches
 - GPTQ returns to clip-sigma scaling
@@ -57,7 +57,7 @@ RUN_ID=exp014_1x_baseline \
 SEED=1337 \
 SKIP_QUANT=1 \
 torchrun --standalone --nproc_per_node=1 \
-experiments/014-ar-selfgen-gptq/train_gpt.py
+experiments/014-ar-latent/train_gpt.py
 ```
 
 8xH100 baseline screen:
@@ -67,7 +67,7 @@ RUN_ID=exp014_8x_baseline \
 SEED=1337 \
 SKIP_QUANT=1 \
 torchrun --standalone --nproc_per_node=8 \
-experiments/014-ar-selfgen-gptq/train_gpt.py
+experiments/014-ar-latent/train_gpt.py
 ```
 
 Full GPTQ baseline:
@@ -76,7 +76,7 @@ Full GPTQ baseline:
 RUN_ID=exp014_gptq_full \
 SEED=1337 \
 torchrun --standalone --nproc_per_node=1 \
-experiments/014-ar-selfgen-gptq/train_gpt.py
+experiments/014-ar-latent/train_gpt.py
 ```
 
 ## Notes
