@@ -1,0 +1,42 @@
+logs/d5f8a2c3-60ca-4b8f-8c09-dcb9a85d8829.txt
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_8192_bpe.model
+train_loader:dataset:fineweb10B_sp8192 train_shards:80
+val_loader:shards pattern=./data/datasets/fineweb10B_sp8192/fineweb_val_*.bin tokens:40540160
+model_params:36204632
+diffusion_aux:prob:0.03 weight:0.5000 start_frac:0.25 stop_frac:0.60 subsample:1.00 objective:latent_mse params:263168
+XSA:last_11 active_layers:[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+world_size:1 grad_accum_steps:8
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:8 num_kv_heads:4
+tie_embeddings:True embed_lr:0.03 head_lr:0.008 matrix_lr:0.045 scalar_lr:0.02
+quant_stack:compressor=brotli matrix_bits=6 embed_bits=8 matrix_clip_sigmas=12.85 embed_clip_sigmas=20.0 muon_row_normalize=True
+train_batch_tokens:786432 train_seq_len:2048 iterations:20000 warmup_steps:20 max_wallclock_seconds:600.000
+seed:1337
+gptq:reserve_skipped skip_quant:enabled effective_wallclock_ms:600000
+screen_mode:warmup_steps 20->2
+warmup_step:1/2
+warmup_step:2/2
+step:0/20000 val_loss:9.00796645 val_bpb:3.48726453 train_time:0ms step_avg:0.02ms
+step:1/20000 train_loss:9.0082 train_time:727ms step_avg:726.78ms
+step:2/20000 train_loss:12.2306 train_time:1387ms step_avg:693.66ms
+step:3/20000 train_loss:10.8653 train_time:2140ms step_avg:713.26ms
+step:4/20000 train_loss:9.1848 train_time:2887ms step_avg:721.82ms
+step:5/20000 train_loss:8.0375 train_time:3635ms step_avg:726.97ms
+step:6/20000 train_loss:7.5391 train_time:4382ms step_avg:730.29ms
+step:7/20000 train_loss:7.2490 train_time:5131ms step_avg:733.00ms
+step:8/20000 train_loss:7.0503 train_time:5884ms step_avg:735.45ms
+step:9/20000 train_loss:6.9423 train_time:6640ms step_avg:737.80ms
+step:10/20000 train_loss:6.7774 train_time:7393ms step_avg:739.34ms
+diffusion_startup:step:201 elapsed_ms:150235 frac:0.25
+diffusion_cutoff:step:475 elapsed_ms:360165 frac:0.60
+step:500/20000 train_loss:3.2744 train_time:378782ms step_avg:757.56ms
+swa:start step:700
+late_qat:enabled step:717 scale:0.1490
+step:797/20000 val_loss:3.06642771 val_bpb:1.18710972 train_time:600083ms step_avg:752.93ms
+stopping_early: wallclock_cap train_time:600083ms step:797/20000
+peak memory allocated: 49966 MiB reserved: 50076 MiB
+DIAGNOSTIC post_train val_loss:3.0664 val_bpb:1.1871 eval_time:12437ms
+export_excluding_training_only_params:262144
+Serialized model: 135398000 bytes
+Code size: 101739 bytes
+skip_quant:enabled — skipping post-training quantization pipeline
