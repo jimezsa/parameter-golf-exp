@@ -345,7 +345,9 @@ HP re-tuning on 8xH100 (10 min wallclock, ~5800 steps). All runs use 02 harness,
 | v8-8x | 0.020 | 0.02 | 0.667 | 1337 | 1.0964 | 104.14 | 5762 | [v8_8x_minlr002.log](results/v8_8x_minlr002.log) | MIN_LR bracket — ties v6-8x exactly, plateau 0.00–0.02 confirmed |
 | v9-8x | 0.020 | 0.00 | 0.750 | 1337 | CRASH | — | ~1500 | — | NCCL ALLREDUCE timeout, killed |
 | v9-8x-retry | 0.020 | 0.00 | 0.750 | 1337 | 1.0960 | 104.04 | 5768 | [v9_8x_warmdown075.log](results/v9_8x_warmdown075.log) | WARMDOWN_FRAC=0.750 — −0.0004 vs v6-8x, within noise. Dead lever. |
-| v10-8x-gptq | 0.020 | 0.00 | 0.667 | 1337 | 1.0970 (pre) | 104.24 | 5642 | — | Full GPTQ run — pre-quant OK, GPTQ killed per user directive. −12s budget reserve = fewer steps vs SKIP_QUANT runs. |
+| v10-8x-gptq | 0.020 | 0.00 | 0.667 | 1337 | 1.0970 (pre) | 104.24 | 5642 | — | Full GPTQ run — pre-quant OK, GPTQ pipeline killed by SIGTERM (external). −12s budget reserve = fewer steps vs SKIP_QUANT runs. Re-run as v10-8x-gptq-final. |
+| v11-8x | 0.020 | 0.00 | 0.667 | 1337 | 1.0967 | 104.07 | 5766 | [v11_8x_wd110.log](results/v11_8x_wd110.log) | WD=0.110 (vs 0.090 default) — +0.0003 vs v6-8x, within noise. **WD dead on 8xH100 too.** |
+| v10-8x-gptq-final | 0.020 | 0.00 | 0.667 | 1337 | RUNNING | — | — | — | Full GPTQ submission run — re-run with GPTQ enabled, awaiting completion. |
 
 **8xH100 best pre-quant: 1.0960** (v9-8x-retry, nominally) / **1.0964** (v6-8x, defensible default recipe).
 
@@ -354,6 +356,8 @@ HP re-tuning on 8xH100 (10 min wallclock, ~5800 steps). All runs use 02 harness,
 **MIN_LR scan verdict:** 1xH100 found MIN_LR=0.05 optimal (inverted-U). 8xH100 reverses this: MIN_LR=0.00 is best, plateau extends to 0.02. With more steps in warmdown, the model benefits from LR decaying fully to zero rather than holding a floor. {0.00, 0.02, 0.05} = {1.0964, 1.0964, 1.0975}.
 
 **WARMDOWN_FRAC scan verdict:** Dead on both 1xH100 and 8xH100. 0.750 = 1.0960 vs 0.667 = 1.0964 (−0.0004, within noise).
+
+**WD=0.110 scan verdict:** Dead on 8xH100. v11-8x = 1.0967 vs v6-8x = 1.0964 (+0.0003, within noise). Consistent with 1xH100 result (5th dead lever).
 
 ## Status
 
