@@ -651,6 +651,15 @@ class ShuffledSequenceLoader:
         self.rng = np.random.Generator(np.random.PCG64(args.seed + rank))
         self.num_tokens = [_read_num_tokens(f) for f in self.files]
         self.start_inds: list[list[int]] = [[] for _ in self.files]
+        self.window_offsets = np.arange(self.seq_len + 1, dtype=np.int64)
+        self.prefetch_stream = torch.cuda.Stream() if device.type == "cuda" else None
+        self._buffer_batch_size: int | None = None
+        self._host_x: list[Tensor] = []
+        self._host_y: list[Tensor] = []
+        self._device_x: list[Tensor] = []
+        self._device_y: list[Tensor] = []
+        self._ready_slot: int | None = None
+        self._next_slot = 0
         for shard_idx in range(len(self.files)):
             self._reset_shard(shard_idx)
 
@@ -661,28 +670,78 @@ class ShuffledSequenceLoader:
         order = self.rng.permutation(num_sequences)
         self.start_inds[shard_idx] = (phase + order * self.seq_len).tolist()
 
-    def next_batch(self, global_tokens: int, grad_accum_steps: int) -> tuple[Tensor, Tensor]:
+    def _remaining_counts(self) -> np.ndarray:
+        return np.fromiter((len(s) for s in self.start_inds), dtype=np.int64, count=len(self.start_inds))
+
+    def _ensure_buffers(self, batch_size: int) -> None:
+        if self._buffer_batch_size == batch_size:
+            return
+        self._buffer_batch_size = batch_size
+        if self.device.type == "cuda":
+            self._host_x = [torch.empty((batch_size, self.seq_len), dtype=torch.int64, pin_memory=True) for _ in range(2)]
+            self._host_y = [torch.empty((batch_size, self.seq_len), dtype=torch.int64, pin_memory=True) for _ in range(2)]
+            self._device_x = [torch.empty((batch_size, self.seq_len), dtype=torch.int64, device=self.device) for _ in range(2)]
+            self._device_y = [torch.empty((batch_size, self.seq_len), dtype=torch.int64, device=self.device) for _ in range(2)]
+        else:
+            self._host_x = [torch.empty((batch_size, self.seq_len), dtype=torch.int64) for _ in range(2)]
+            self._host_y = [torch.empty((batch_size, self.seq_len), dtype=torch.int64) for _ in range(2)]
+            self._device_x = self._host_x
+            self._device_y = self._host_y
+        self._ready_slot = None
+        self._next_slot = 0
+
+    def _fill_host_batch(self, x_host: Tensor, y_host: Tensor, batch_size: int) -> None:
+        remaining = self._remaining_counts()
+        total = int(remaining.sum())
+        if total < batch_size:
+            for shard_idx in range(len(self.files)):
+                self._reset_shard(shard_idx)
+            remaining = self._remaining_counts()
+            total = int(remaining.sum())
+        if total < batch_size:
+            raise ValueError(f"Not enough tokens to build batch_size={batch_size}")
+        counts = self.rng.multivariate_hypergeometric(remaining, batch_size)
+        cursor = 0
+        for shard_idx, count in enumerate(counts.tolist()):
+            if count <= 0:
+                continue
+            starts = np.asarray(self.start_inds[shard_idx][-count:], dtype=np.int64)
+            del self.start_inds[shard_idx][-count:]
+            mm = _get_shard_memmap(self.files[shard_idx])
+            windows = np.asarray(mm[starts[:, None] + self.window_offsets[None, :]], dtype=np.int64)
+            windows_t = torch.from_numpy(windows)
+            next_cursor = cursor + count
+            x_host[cursor:next_cursor].copy_(windows_t[:, :-1])
+            y_host[cursor:next_cursor].copy_(windows_t[:, 1:])
+            cursor = next_cursor
+
+    def _prefetch_next(self, global_tokens: int, grad_accum_steps: int) -> None:
         local_tokens = global_tokens // (self.world_size * grad_accum_steps)
         batch_size = local_tokens // self.seq_len
-        remaining = np.array([len(s) for s in self.start_inds], dtype=np.float64)
-        x = torch.empty((batch_size, self.seq_len), dtype=torch.int64)
-        y = torch.empty((batch_size, self.seq_len), dtype=torch.int64)
-        for batch_idx in range(batch_size):
-            total = remaining.sum()
-            if total <= 0:
-                for shard_idx in range(len(self.files)):
-                    self._reset_shard(shard_idx)
-                remaining = np.array([len(s) for s in self.start_inds], dtype=np.float64)
-                total = remaining.sum()
-            probs = remaining / total
-            shard_idx = int(self.rng.choice(len(self.files), p=probs))
-            start = self.start_inds[shard_idx].pop()
-            remaining[shard_idx] -= 1
-            mm = _get_shard_memmap(self.files[shard_idx])
-            window = torch.as_tensor(np.array(mm[start:start + self.seq_len + 1], dtype=np.int64))
-            x[batch_idx] = window[:-1]
-            y[batch_idx] = window[1:]
-        return x.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
+        self._ensure_buffers(batch_size)
+        slot = self._next_slot
+        x_host = self._host_x[slot]
+        y_host = self._host_y[slot]
+        self._fill_host_batch(x_host, y_host, batch_size)
+        if self.prefetch_stream is not None:
+            current_stream = torch.cuda.current_stream(device=self.device)
+            with torch.cuda.stream(self.prefetch_stream):
+                self.prefetch_stream.wait_stream(current_stream)
+                self._device_x[slot].copy_(x_host, non_blocking=True)
+                self._device_y[slot].copy_(y_host, non_blocking=True)
+        self._ready_slot = slot
+        self._next_slot = 1 - slot
+
+    def next_batch(self, global_tokens: int, grad_accum_steps: int) -> tuple[Tensor, Tensor]:
+        if self._ready_slot is None:
+            self._prefetch_next(global_tokens, grad_accum_steps)
+        ready_slot = self._ready_slot
+        if self.prefetch_stream is not None:
+            torch.cuda.current_stream(device=self.device).wait_stream(self.prefetch_stream)
+        x = self._device_x[ready_slot]
+        y = self._device_y[ready_slot]
+        self._prefetch_next(global_tokens, grad_accum_steps)
+        return x, y
 
 # --- Transformer modules ---
 
