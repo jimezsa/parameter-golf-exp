@@ -89,15 +89,15 @@ class Hyperparameters:
     qat_enabled = bool(int(os.environ.get("QAT_ENABLED", "0")))
     xsa_last_n = int(os.environ.get("XSA_LAST_N", 11))  # XSA on ALL layers (our novel contribution)
     rope_dims = int(os.environ.get("ROPE_DIMS", 16))
-    swigelu = bool(int(os.environ.get("SWIGELU", "0")))
+    swigelu = bool(int(os.environ.get("SWIGELU", "1")))  # SwiGeLU default ON for exp 015
     swigelu_hidden_dim = int(os.environ.get("SWIGELU_HIDDEN_DIM", 1344))
     ln_scale = bool(int(os.environ.get("LN_SCALE", "1")))
     late_qat_threshold = float(os.environ.get("LATE_QAT_THRESHOLD", 0.15))
     skip_gates_enabled = bool(int(os.environ.get("SKIP_GATES_ENABLED", "1")))
     diffusion_loss_weight = float(os.environ.get("DIFFUSION_LOSS_WEIGHT", 0.50))
     diffusion_aux_prob = float(os.environ.get("DIFFUSION_AUX_PROB", 0.03))
-    diffusion_stop_frac = float(os.environ.get("DIFFUSION_STOP_FRAC", 0.40))  # fraction of wallclock after which diffusion is disabled (1.0 = never stop)
-    diffusion_start_frac = float(os.environ.get("DIFFUSION_START_FRAC", 0.25))  # fraction of wallclock before which diffusion is disabled (0.0 = always on)
+    diffusion_stop_frac = float(os.environ.get("DIFFUSION_STOP_FRAC", 0.60))  # exp 015 default: wider window (was 0.40 in exp 014)
+    diffusion_start_frac = float(os.environ.get("DIFFUSION_START_FRAC", 0.15))  # exp 015 default: wider window (was 0.25 in exp 014)
     diffusion_subsample_frac = float(os.environ.get("DIFFUSION_SUBSAMPLE_FRAC", 1.00))  # optional fraction of seq positions for latent MSE loss
     # GPTQ calibration
     gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 64))
@@ -124,7 +124,7 @@ class Hyperparameters:
     recurrence_start_frac = float(os.environ.get("RECURRENCE_START_FRAC", 0.35))  # wallclock fraction before activating
     skip_quant = bool(int(os.environ.get("SKIP_QUANT", "0")))  # skip post-training quantization pipeline
     weight_share = bool(int(os.environ.get("WEIGHT_SHARE", "0")))  # block-wise weight sharing: run each layer twice for 2x effective depth
-    attn_res = bool(int(os.environ.get("ATTN_RES", "0")))  # Attention Residuals: replace fixed residual + U-Net skips with learned depth attention
+    attn_res = bool(int(os.environ.get("ATTN_RES", "1")))  # Attention Residuals: replace fixed residual + U-Net skips with learned depth attention (default ON for exp 015)
 
 # --- Batched Newton-Schulz orthogonalization ---
 
