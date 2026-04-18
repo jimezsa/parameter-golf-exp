@@ -77,6 +77,7 @@ class Hyperparameters:
     muon_row_normalize = bool(int(os.environ.get("MUON_ROW_NORMALIZE", "1")))
     beta1 = float(os.environ.get("BETA1", 0.9))
     beta2 = float(os.environ.get("BETA2", 0.95))
+    beta2_end = float(os.environ.get("BETA2_END", -1))  # -1 = no ramp (use fixed beta2)
     adam_eps = float(os.environ.get("ADAM_EPS", 1e-8))
     grad_clip_norm = float(os.environ.get("GRAD_CLIP_NORM", 0.3))
     eval_stride = int(os.environ.get("EVAL_STRIDE", 64))
@@ -2120,6 +2121,12 @@ def main() -> None:
         for opt in optimizers:
             for group in opt.param_groups:
                 group["lr"] = group["base_lr"] * scale
+        if args.beta2_end > 0:
+            b2_frac = min(step / max(args.iterations - 1, 1), 1.0)
+            cur_beta2 = args.beta2 + (args.beta2_end - args.beta2) * b2_frac
+            for opt in [optimizer_tok, optimizer_scalar, optimizer_diffusion] + ([optimizer_head] if optimizer_head else []):
+                for group in opt.param_groups:
+                    group["betas"] = (args.beta1, cur_beta2)
         if args.grad_clip_norm > 0:
             torch.nn.utils.clip_grad_norm_(base_model.parameters(), args.grad_clip_norm)
         # === 3-phase overlapped optimizer step ===
