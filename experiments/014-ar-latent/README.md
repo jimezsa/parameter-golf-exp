@@ -25,7 +25,7 @@ Shared defaults:
 - `TIED_EMBED_LR=0.03`
 - `DIFFUSION_AUX_PROB=0.03`
 - `DIFFUSION_START_FRAC=0.25`
-- `DIFFUSION_STOP_FRAC=0.40`
+- `DIFFUSION_STOP_FRAC=0.60`
 - `WARMDOWN_FRAC=0.667`
 - `WARMUP_STEPS=20`
 - `MUON_WD=0.090`
@@ -78,6 +78,14 @@ SEED=1337 \
 torchrun --standalone --nproc_per_node=1 \
 experiments/014-ar-latent/train_gpt.py
 ```
+
+## Iteration Results
+
+| Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Description |
+|---------|---------|----------------|-----------------|---------------|--------|-------------|
+| v1 | 1.1881 | — | 166 | — | — | Baseline: DIFFUSION_STOP_FRAC=0.40, all other HPs from exp 013 v21 |
+| v2 | 1.1870 | — | 166 | — | — | DIFFUSION_STOP_FRAC=0.50 |
+| v3 | 1.1867 | — | 166 | — | — | DIFFUSION_STOP_FRAC=0.60, reproduces exp 013 v21 (1.1868). Gate 1 passed. |
 
 ## Notes
 
