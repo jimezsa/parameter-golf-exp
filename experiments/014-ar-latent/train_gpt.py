@@ -1396,21 +1396,30 @@ class _HessianAttn(nn.Module):
 
 class _HessianMLP(nn.Module):
     """Non-banked MLP with CastedLinear layers for Hessian hooks."""
-    def __init__(self, dim, mlp_mult):
+    def __init__(self, dim, mlp_mult, swigelu=False, swigelu_hidden_dim=1344):
         super().__init__()
-        self.fc = CastedLinear(dim, int(mlp_mult * dim), bias=False)
-        self.proj = CastedLinear(int(mlp_mult * dim), dim, bias=False)
+        self.swigelu = swigelu
+        if swigelu:
+            self.fc = CastedLinear(dim, 2 * swigelu_hidden_dim, bias=False)
+            self.proj = CastedLinear(swigelu_hidden_dim, dim, bias=False)
+        else:
+            self.fc = CastedLinear(dim, int(mlp_mult * dim), bias=False)
+            self.proj = CastedLinear(int(mlp_mult * dim), dim, bias=False)
     def forward(self, x):
+        if self.swigelu:
+            h = self.fc(x)
+            half = h.shape[-1] // 2
+            return self.proj(F.silu(h[..., :half]) * h[..., half:])
         return self.proj(F.leaky_relu(self.fc(x), negative_slope=0.5).square())
 
 class _HessianBlock(nn.Module):
-    def __init__(self, dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init, train_seq_len, layer_idx=0, ln_scale=False, parallel=False):
+    def __init__(self, dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init, train_seq_len, layer_idx=0, ln_scale=False, parallel=False, swigelu=False, swigelu_hidden_dim=1344):
         super().__init__()
         self.parallel = parallel
         self.attn_norm = RMSNorm()
         self.mlp_norm = RMSNorm()
         self.attn = _HessianAttn(dim, num_heads, num_kv_heads, rope_base, qk_gain_init, train_seq_len)
-        self.mlp = _HessianMLP(dim, mlp_mult)
+        self.mlp = _HessianMLP(dim, mlp_mult, swigelu=swigelu, swigelu_hidden_dim=swigelu_hidden_dim)
         self.attn_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
         self.mlp_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
         self.resid_mix = nn.Parameter(torch.stack((torch.ones(dim), torch.zeros(dim))).float())
@@ -1459,7 +1468,8 @@ class _HessianGPT(nn.Module):
         )
         self.blocks = nn.ModuleList([
             _HessianBlock(model_dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init, train_seq_len,
-                          layer_idx=i, ln_scale=ln_scale, parallel=(i >= parallel_start_layer))
+                          layer_idx=i, ln_scale=ln_scale, parallel=(i >= parallel_start_layer),
+                          swigelu=swigelu, swigelu_hidden_dim=swigelu_hidden_dim)
             for i in range(num_layers)
         ])
         if rope_dims > 0:
