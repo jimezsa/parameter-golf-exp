@@ -89,6 +89,7 @@ experiments/014-ar-latent/train_gpt.py
 | v4 | 1.2798 | 1.2825 (sw) / 1.2980 (rt) | 1566 | 15,998,434 | — | Gate 2: full GPTQ w/ AR self-gen. **Pod bottleneck**: only 355 steps (vs ~3600 expected). Gap=+0.0027 sw, but undertrained — not directly comparable. Hessians 16.8s, AR calib 123.7s, quant 46.0s. |
 | v5 | 1.1827 | — | 170 | — | a2e3c4d | SwiGeLU activation (SWIGELU=1), DIFFUSION_STOP_FRAC=0.60. Beats v3 by 0.0040. |
 | v6 | 1.1817 | — | 170 | — | da9f1a0 | Wider diffusion window: DIFFUSION_START_FRAC=0.15, STOP=0.60. Beats v5 by 0.0010. |
+| v7 | 1.1918 | — | 796 | — | — | **Undertrained** (755/~3600 steps). Throttled pod (345 MHz GPU clock). Invalid — do not compare. |
 
 ## Notes
 
