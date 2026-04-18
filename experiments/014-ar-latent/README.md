@@ -86,6 +86,7 @@ experiments/014-ar-latent/train_gpt.py
 | v1 | 1.1881 | — | 166 | — | — | Baseline: DIFFUSION_STOP_FRAC=0.40, all other HPs from exp 013 v21 |
 | v2 | 1.1870 | — | 166 | — | — | DIFFUSION_STOP_FRAC=0.50 |
 | v3 | 1.1867 | — | 166 | — | — | DIFFUSION_STOP_FRAC=0.60, reproduces exp 013 v21 (1.1868). Gate 1 passed. |
+| v4 | 1.2798 | 1.2825 (sw) / 1.2980 (rt) | 1566 | 15,998,434 | — | Gate 2: full GPTQ w/ AR self-gen. **Pod bottleneck**: only 355 steps (vs ~3600 expected). Gap=+0.0027 sw, but undertrained — not directly comparable. Hessians 16.8s, AR calib 123.7s, quant 46.0s. |
 
 ## Notes
 
