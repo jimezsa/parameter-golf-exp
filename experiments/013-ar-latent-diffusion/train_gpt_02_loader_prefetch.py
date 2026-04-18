@@ -1230,10 +1230,8 @@ def quantize_int6_per_row(t: Tensor, clip_range: int = 31) -> tuple[Tensor, Tens
     q = torch.clamp(torch.round(t32 / scale.float()), -clip_range, clip_range).to(torch.int8)
     return q, scale
 
-def gptq_quantize_weight(weight: Tensor, hessian: Tensor, clip_range: int, block_size: int = 128):
-    """Full GPTQ: Hessian-aware quantization with percentile search for optimal clip scale.
-    Matches dexhunter AllInt6 approach: tries 5 percentile candidates, runs full block-wise
-    GPTQ for each, picks best by reconstruction MSE."""
+def gptq_quantize_weight(weight: Tensor, hessian: Tensor, clip_sigmas: float, clip_range: int, block_size: int = 128):
+    """Full GPTQ: Hessian-aware quantization."""
     t32 = weight.float()
     rows, cols = t32.shape
     H = hessian.float().clone()
@@ -1249,40 +1247,29 @@ def gptq_quantize_weight(weight: Tensor, hessian: Tensor, clip_range: int, block
     Hinv = torch.linalg.cholesky(H)
     Hinv = torch.cholesky_inverse(Hinv)
     Hinv = torch.linalg.cholesky(Hinv, upper=True)
-    best_q = None; best_scale = None; best_err = float('inf')
-    for pct in [0.9990, 0.9995, 0.9999, 0.99999, 1.0]:
-        if pct < 1.0:
-            row_clip = torch.quantile(t32.abs(), pct, dim=1)
-        else:
-            row_clip = t32.abs().amax(dim=1)
-        s = (row_clip / clip_range).clamp_min(1.0 / clip_range).to(torch.float16)
-        sf = s.float()
-        Q = torch.zeros_like(W, dtype=torch.int8)
-        W_work = W.clone()
-        for i1 in range(0, cols, block_size):
-            i2 = min(i1 + block_size, cols)
-            count = i2 - i1
-            W1 = W_work[:, i1:i2].clone()
-            Q1 = torch.zeros(rows, count, dtype=torch.int8)
-            Err1 = torch.zeros(rows, count)
-            Hinv1 = Hinv[i1:i2, i1:i2]
-            for i in range(count):
-                w = W1[:, i]
-                d = Hinv1[i, i]
-                q = torch.clamp(torch.round(w / sf), -clip_range, clip_range).to(torch.int8)
-                Q1[:, i] = q
-                err = (w - q.float() * sf) / d
-                W1[:, i:] -= err.unsqueeze(1) * Hinv1[i, i:].unsqueeze(0)
-                Err1[:, i] = err
-            Q[:, i1:i2] = Q1
-            if i2 < cols:
-                W_work[:, i2:] -= Err1 @ Hinv[i1:i2, i2:]
-        recon = Q.float() * sf[:, None]
-        mse = (W - recon).pow(2).mean().item()
-        if mse < best_err:
-            best_q, best_scale, best_err = Q, s, mse
-    best_q = best_q[:, inv_perm]
-    return best_q, best_scale
+    scale = (clip_sigmas * t32.std(dim=1) / clip_range).clamp_min(1e-10).to(torch.float16)
+    scale_f = scale.float()
+    Q = torch.zeros(rows, cols, dtype=torch.int8)
+    W_work = W.clone()
+    for i1 in range(0, cols, block_size):
+        i2 = min(i1 + block_size, cols)
+        count = i2 - i1
+        W1 = W_work[:, i1:i2].clone()
+        Q1 = torch.zeros(rows, count, dtype=torch.int8)
+        Err1 = torch.zeros(rows, count)
+        Hinv1 = Hinv[i1:i2, i1:i2]
+        for i in range(count):
+            w = W1[:, i]
+            d = Hinv1[i, i]
+            q = torch.clamp(torch.round(w / scale_f), -clip_range, clip_range).to(torch.int8)
+            Q1[:, i] = q
+            err = (w - q.float() * scale_f) / d
+            W1[:, i:] -= err.unsqueeze(1) * Hinv1[i, i:].unsqueeze(0)
+            Err1[:, i] = err
+        Q[:, i1:i2] = Q1
+        if i2 < cols:
+            W_work[:, i2:] -= Err1 @ Hinv[i1:i2, i2:]
+    return Q[:, inv_perm], scale
 
 def _unbank_state_dict(sd: dict[str, Tensor], num_layers: int) -> dict[str, Tensor]:
     """Convert 3D bank tensors into individual 2D tensors with standard names."""
@@ -1566,6 +1553,7 @@ def mixed_quantize_int6(state_dict: dict[str, Tensor], args: Hyperparameters, he
         q, s = gptq_quantize_weight(
             t,
             hessians[name],
+            clip_sigmas=args.embed_clip_sigmas if cat == 'embed' else args.matrix_clip_sigmas,
             clip_range=clip_range,
             block_size=args.gptq_block_size,
         )
