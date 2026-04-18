@@ -1018,13 +1018,13 @@ class GPT(nn.Module):
                 elif module.weight.ndim == 2 and module.weight.shape[0] >= 64 and module.weight.shape[1] >= 64:
                     nn.init.orthogonal_(module.weight, gain=1.0)
 
-    def _depth_attn(self, H: Tensor, num_prior: int, query_idx: int) -> Tensor:
+    def _depth_attn(self, layer_outputs: tuple, query_idx: int) -> Tensor:
         """Attention Residuals: compute input as softmax-weighted sum of all prior layer outputs.
-        H: pre-allocated buffer (B, S, max_layers+1, D). Uses H[:, :, :num_prior, :].
+        layer_outputs: tuple of (B, S, D) tensors from layers 0..len-1.
         """
-        if num_prior == 1:
-            return H[:, :, 0, :]
-        h = H[:, :, :num_prior, :]  # (B, S, num_prior, D)
+        if len(layer_outputs) == 1:
+            return layer_outputs[0]
+        h = torch.stack(layer_outputs, dim=2)  # (B, S, num_prior, D)
         q = self.depth_queries[query_idx].to(dtype=h.dtype)  # (D,)
         inv_sqrt_d = 1.0 / math.sqrt(q.numel())
         scores = (h * q).sum(dim=-1) * inv_sqrt_d  # (B, S, num_prior)
@@ -1051,13 +1051,11 @@ class GPT(nn.Module):
 
         # --- Attention Residuals path: flat sequential with depth attention ---
         if self.attn_res:
-            B, S, D = x.shape
-            H = torch.zeros(B, S, self.num_layers + 1, D, device=x.device, dtype=x.dtype)
-            H[:, :, 0, :] = x
+            layer_outputs = (x,)
             for i in range(self.num_layers):
-                x_in = self._depth_attn(H, i + 1, i)
+                x_in = self._depth_attn(layer_outputs, i)
                 x = self._run_block(i, x_in, x_in)
-                H[:, :, i + 1, :] = x
+                layer_outputs = layer_outputs + (x,)
             return self.final_norm(x)
 
         # --- Standard U-Net path ---
@@ -1466,21 +1464,18 @@ class _HessianGPT(nn.Module):
         x0 = x
         # --- Attention Residuals path ---
         if self.attn_res:
-            B, S, D = x.shape
-            H = torch.zeros(B, S, self.num_layers + 1, D, device=x.device, dtype=x.dtype)
-            H[:, :, 0, :] = x
+            layer_outputs = (x,)
             for i in range(self.num_layers):
-                num_prior = i + 1
-                if num_prior == 1:
-                    x_in = H[:, :, 0, :]
+                if len(layer_outputs) == 1:
+                    x_in = layer_outputs[0]
                 else:
-                    h = H[:, :, :num_prior, :]
+                    h = torch.stack(layer_outputs, dim=2)
                     q = self.depth_queries[i].to(dtype=h.dtype)
                     scores = (h * q).sum(dim=-1) * (1.0 / math.sqrt(q.numel()))
                     weights = F.softmax(scores, dim=-1)
                     x_in = (weights.unsqueeze(-1) * h).sum(dim=2)
                 x = self.blocks[i](x_in, x_in)
-                H[:, :, i + 1, :] = x
+                layer_outputs = layer_outputs + (x,)
             x = self.final_norm(x)
             x_flat = x.reshape(-1, x.size(-1))
             targets = target_ids.reshape(-1)
