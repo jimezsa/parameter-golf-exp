@@ -24,9 +24,44 @@ Pure autoregressive training with Full Attention Residuals should match or beat 
 
 ## Run Config
 
-- GPU: 1x H100 (dev) / 8x H100 (final)
-- Steps: ~3600 (1x) / ~450 (8x)
-- Key env vars: `ATTN_RES=1`, `SWIGELU=1`
+### 1xH100 (dev) — from exp 013 v21 (1.1868)
+
+| Parameter | Value |
+|-----------|-------|
+| `MATRIX_LR` | 0.045 |
+| `MIN_LR` | 0.05 |
+| `SCALAR_LR` | 0.02 |
+| `HEAD_LR` | 0.008 |
+| `TIED_EMBED_LR` | 0.03 |
+| `MUON_WD` | 0.09 |
+| `SWIGELU` | 1 |
+| `ATTN_RES` | 1 |
+| `LOGIT_SOFTCAP` | 30.0 |
+| `SWA_ENABLED` | 1 |
+| Steps | ~3600 |
+
+### 8xH100 (final) — from exp 013 v6-8x (1.0964)
+
+| Parameter | Value |
+|-----------|-------|
+| `MATRIX_LR` | 0.020 |
+| `MIN_LR` | 0.00 |
+| `SCALAR_LR` | 0.02 |
+| `HEAD_LR` | 0.008 |
+| `TIED_EMBED_LR` | 0.03 |
+| `MUON_WD` | 0.09 |
+| `SWIGELU` | 1 |
+| `ATTN_RES` | 1 |
+| `LOGIT_SOFTCAP` | 30.0 |
+| `SWA_ENABLED` | 1 |
+| Steps | ~450 |
+
+### Shared Architecture
+
+- 11L / 512d, 8 heads, 4 KV heads
+- SP8192 tokenizer, SwiGeLU (hidden_dim=1344)
+- MuonEq-R optimizer, XSA on all 11 layers
+- AttnRes depth queries: 11 × 512 = 5,632 params
 
 ## Run Commands
 
