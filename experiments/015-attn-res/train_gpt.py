@@ -94,11 +94,6 @@ class Hyperparameters:
     ln_scale = bool(int(os.environ.get("LN_SCALE", "1")))
     late_qat_threshold = float(os.environ.get("LATE_QAT_THRESHOLD", 0.15))
     skip_gates_enabled = bool(int(os.environ.get("SKIP_GATES_ENABLED", "1")))
-    diffusion_loss_weight = float(os.environ.get("DIFFUSION_LOSS_WEIGHT", 0.50))
-    diffusion_aux_prob = float(os.environ.get("DIFFUSION_AUX_PROB", 0.03))
-    diffusion_stop_frac = float(os.environ.get("DIFFUSION_STOP_FRAC", 0.60))  # exp 015 default: wider window (was 0.40 in exp 014)
-    diffusion_start_frac = float(os.environ.get("DIFFUSION_START_FRAC", 0.15))  # exp 015 default: wider window (was 0.25 in exp 014)
-    diffusion_subsample_frac = float(os.environ.get("DIFFUSION_SUBSAMPLE_FRAC", 1.00))  # optional fraction of seq positions for latent MSE loss
     # GPTQ calibration
     gptq_calib_batches = int(os.environ.get("GPTQ_CALIB_BATCHES", 64))
     gptq_block_size = int(os.environ.get("GPTQ_BLOCK_SIZE", 128))
@@ -114,8 +109,6 @@ class Hyperparameters:
     embed_bits = int(os.environ.get("EMBED_BITS", 8))
     matrix_clip_sigmas = float(os.environ.get("MATRIX_CLIP_SIGMAS", 12.85))
     embed_clip_sigmas = float(os.environ.get("EMBED_CLIP_SIGMAS", 20.0))
-    diffusion_scalar_wd = float(os.environ.get("DIFFUSION_SCALAR_WD", "0.08"))
-    diffusion_head_wd = float(os.environ.get("DIFFUSION_HEAD_WD", "0.08"))
     compressor = os.environ.get("COMPRESSOR", "brotli")
     parallel_start_layer = int(os.environ.get("PARALLEL_START_LAYER", 7))  # layers >= this use parallel residuals
     recurrence_depth = int(os.environ.get("RECURRENCE_DEPTH", 1))  # 1 = no recurrence, 2 = one extra pass through zone
@@ -888,12 +881,9 @@ class Block(nn.Module):
         up_w: Tensor,
         down_w: Tensor,
         is_causal: bool = True,
-        t_emb: Tensor | None = None,
     ) -> Tensor:
         mix = self.resid_mix.to(dtype=x.dtype)
         x_in = mix[0][None, None, :] * x + mix[1][None, None, :] * x0
-        if t_emb is not None:
-            x_in = x_in + t_emb.to(dtype=x_in.dtype)
         attn_out = self.attn(
             self.attn_norm(x_in) * self.ln_scale_factor,
             q_w, k_w, v_w, out_w,
@@ -928,9 +918,6 @@ class GPT(nn.Module):
         rope_dims: int = 0,
         ln_scale: bool = False,
         skip_gates_enabled: bool = True,
-        diffusion_loss_weight: float = 0.5,
-        diffusion_aux_prob: float = 0.25,
-        diffusion_subsample_frac: float = 1.00,
         parallel_start_layer: int = 999,
         recurrence_depth: int = 1,
         recurrence_start: int = 3,
@@ -946,17 +933,10 @@ class GPT(nn.Module):
         self.attn_res = attn_res
         if logit_softcap <= 0.0:
             raise ValueError(f"logit_softcap must be positive, got {logit_softcap}")
-        if not 0.0 <= diffusion_aux_prob <= 1.0:
-            raise ValueError(f"diffusion_aux_prob must be in [0, 1], got {diffusion_aux_prob}")
-        if diffusion_loss_weight < 0.0:
-            raise ValueError(f"diffusion_loss_weight must be non-negative, got {diffusion_loss_weight}")
         self.tie_embeddings = tie_embeddings
         self.tied_embed_init_std = tied_embed_init_std
         self.logit_softcap = logit_softcap
         self._fused_ce = LigerFusedLinearCrossEntropyLoss(softcap=logit_softcap) if _LIGER_FUSED_CE else None
-        self.diffusion_loss_weight = diffusion_loss_weight
-        self.diffusion_aux_prob = diffusion_aux_prob
-        self.diffusion_subsample_frac = diffusion_subsample_frac
         self.recurrence_depth = recurrence_depth
         self.recurrence_start = recurrence_start
         self.recurrence_end = recurrence_end
@@ -968,12 +948,6 @@ class GPT(nn.Module):
             if recurrence_start >= num_layers or recurrence_end >= num_layers:
                 raise ValueError(f"recurrence range [{recurrence_start},{recurrence_end}] out of bounds for {num_layers} layers")
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
-        self.mask_embed = nn.Parameter(torch.randn(model_dim) * tied_embed_init_std)
-        self.time_proj = CastedLinear(1, model_dim, bias=False)
-        self.latent_proj = None
-        if diffusion_loss_weight > 0.0 or diffusion_aux_prob > 0.0:
-            self.latent_proj = CastedLinear(model_dim, model_dim, bias=False)
-            self.latent_proj._zero_init = True
         self.num_encoder_layers = num_layers // 2
         self.num_decoder_layers = num_layers - self.num_encoder_layers
         self.num_skip_weights = min(self.num_encoder_layers, self.num_decoder_layers)
@@ -1026,7 +1000,6 @@ class GPT(nn.Module):
     def _init_weights(self) -> None:
         if self.tie_embeddings:
             nn.init.normal_(self.tok_emb.weight, mean=0.0, std=self.tied_embed_init_std)
-        nn.init.normal_(self.time_proj.weight, mean=0.0, std=self.tied_embed_init_std)
         n = self.num_layers
         proj_scale = 1.0 / math.sqrt(2 * n)
         for i in range(n):
@@ -1061,23 +1034,16 @@ class GPT(nn.Module):
         layer_idx: int,
         x: Tensor,
         x0: Tensor,
-        is_causal: bool,
-        t_emb: Tensor | None,
+        is_causal: bool = True,
     ) -> Tensor:
         n = self.num_layers
         return self.blocks[layer_idx](x, x0,
             self.qo_bank[layer_idx], self.kv_bank[layer_idx], self.kv_bank[n + layer_idx],
             self.qo_bank[n + layer_idx], self.mlp_up_bank[layer_idx], self.mlp_down_bank[layer_idx],
-            is_causal=is_causal, t_emb=t_emb)
+            is_causal=is_causal)
 
-    def _forward_hidden(
-        self,
-        input_ids: Tensor,
-        x_override: Tensor | None = None,
-        is_causal: bool = True,
-        t_emb: Tensor | None = None,
-    ) -> Tensor:
-        x = x_override if x_override is not None else self.tok_emb(input_ids)
+    def _forward_hidden(self, input_ids: Tensor) -> Tensor:
+        x = self.tok_emb(input_ids)
         x = F.rms_norm(x, (x.size(-1),))
         x0 = x
 
@@ -1086,7 +1052,7 @@ class GPT(nn.Module):
             layer_outputs: list[Tensor] = [x]
             for i in range(self.num_layers):
                 x_in = self._depth_attn(layer_outputs, i)
-                x = self._run_block(i, x_in, x_in, is_causal, t_emb)
+                x = self._run_block(i, x_in, x_in)
                 layer_outputs.append(x)
             return self.final_norm(x)
 
@@ -1098,9 +1064,9 @@ class GPT(nn.Module):
         do_recur = self.recurrence_depth > 1
 
         for i in range(n_enc):
-            x = self._run_block(i, x, x0, is_causal, t_emb)
+            x = self._run_block(i, x, x0)
             if self.weight_share:
-                x = self._run_block(i, x, x0, is_causal, t_emb)
+                x = self._run_block(i, x, x0)
             skips.append(x)
 
         for i in range(self.num_decoder_layers):
@@ -1112,13 +1078,13 @@ class GPT(nn.Module):
                     x = torch.lerp(scaled_skip, x, gate)
                 else:
                     x = x + scaled_skip
-            x = self._run_block(bi, x, x0, is_causal, t_emb)
+            x = self._run_block(bi, x, x0)
             if self.weight_share:
-                x = self._run_block(bi, x, x0, is_causal, t_emb)
+                x = self._run_block(bi, x, x0)
             if do_recur and bi == rec_end:
                 for _extra in range(self.recurrence_depth - 1):
                     for ri in range(rec_start, rec_end + 1):
-                        x = self._run_block(ri, x, x0, is_causal, t_emb)
+                        x = self._run_block(ri, x, x0)
 
         return self.final_norm(x)
 
@@ -1131,28 +1097,7 @@ class GPT(nn.Module):
             logits_proj = self.lm_head(hidden)
         return self.logit_softcap * torch.tanh(logits_proj / self.logit_softcap)
 
-    def _diffusion_loss(self, input_ids: Tensor, _target_ids: Tensor, subsample_frac: float = 1.00) -> Tensor:
-        if self.latent_proj is None:
-            raise RuntimeError("latent_proj is required when diffusion loss is enabled")
-        bsz = input_ids.size(0)
-        orig_embeds = self.tok_emb(input_ids)
-        t = torch.rand(bsz, 1, 1, device=input_ids.device, dtype=torch.float32)
-        t_mix = t.to(dtype=orig_embeds.dtype)
-        mask_embed = self.mask_embed.to(dtype=orig_embeds.dtype)[None, None, :]
-        x_diff = t_mix * mask_embed + (1.0 - t_mix) * orig_embeds
-        t_emb = self.time_proj(t.view(-1, 1)).view(bsz, 1, -1).to(dtype=orig_embeds.dtype)
-        hidden_diff = self._forward_hidden(input_ids, x_override=x_diff, is_causal=False, t_emb=t_emb)
-        target_latents = orig_embeds.detach()
-        if 0.0 < subsample_frac < 1.0:
-            seq_len = hidden_diff.size(1)
-            n_sample = max(1, int(seq_len * subsample_frac))
-            idx = torch.randperm(seq_len, device=hidden_diff.device)[:n_sample]
-            hidden_diff = hidden_diff[:, idx, :]
-            target_latents = target_latents[:, idx, :]
-        pred_latents = self.latent_proj(hidden_diff)
-        return F.mse_loss(pred_latents.float(), target_latents.float(), reduction="mean")
-
-    def forward(self, input_ids: Tensor, target_ids: Tensor, run_aux_diffusion: bool = False) -> Tensor:
+    def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
         x = self._forward_hidden(input_ids)
         x_flat = x.reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
@@ -1162,8 +1107,6 @@ class GPT(nn.Module):
         else:
             logits = self._project_logits(x_flat)
             main_loss = F.cross_entropy(logits.float(), targets, reduction="mean")
-        if self.training and run_aux_diffusion and self.diffusion_loss_weight > 0.0:
-            main_loss = main_loss + self.diffusion_loss_weight * self._diffusion_loss(input_ids, target_ids, self.diffusion_subsample_frac)
         return main_loss
     def forward_logits(self, input_ids: Tensor) -> Tensor:
         """Return logits (bsz, seq_len, vocab) without computing loss."""
@@ -1851,9 +1794,6 @@ def main() -> None:
         train_seq_len=args.train_seq_len, xsa_last_n=args.xsa_last_n,
         rope_dims=args.rope_dims, ln_scale=args.ln_scale,
         skip_gates_enabled=args.skip_gates_enabled,
-        diffusion_loss_weight=args.diffusion_loss_weight,
-        diffusion_aux_prob=args.diffusion_aux_prob,
-        diffusion_subsample_frac=args.diffusion_subsample_frac,
         parallel_start_layer=args.parallel_start_layer,
         recurrence_depth=args.recurrence_depth,
         recurrence_start=args.recurrence_start,
@@ -1895,12 +1835,8 @@ def main() -> None:
             scalar_params.append(base_model.skip_gates)
     if base_model.depth_queries is not None:
         scalar_params.append(base_model.depth_queries)
-    diffusion_scalar_params = [base_model.mask_embed, base_model.time_proj.weight]
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
     tok_params = [{"params": [base_model.tok_emb.weight], "lr": token_lr, "base_lr": token_lr}]
-    diffusion_head_params: list[Tensor] = []
-    if base_model.latent_proj is not None:
-        diffusion_head_params.append(base_model.latent_proj.weight)
     optimizer_tok = torch.optim.AdamW(
         tok_params,
         betas=(args.beta1, args.beta2),
@@ -1925,33 +1861,11 @@ def main() -> None:
         weight_decay=0.0,
         fused=True,
     )
-    optimizer_diffusion = torch.optim.AdamW(
-        [
-            {
-                "params": diffusion_scalar_params,
-                "lr": args.scalar_lr,
-                "base_lr": args.scalar_lr,
-                "weight_decay": args.diffusion_scalar_wd,
-            },
-            {
-                "params": diffusion_head_params,
-                "lr": args.head_lr,
-                "base_lr": args.head_lr,
-                "weight_decay": args.diffusion_head_wd,
-            },
-        ],
-        betas=(args.beta1, args.beta2),
-        eps=args.adam_eps,
-        weight_decay=0.0,
-        fused=True,
-    )
     # Non-bank params that need manual all-reduce (replicated across GPUs)
     replicated_params = list(optimizer_tok.param_groups[0]["params"])
     for pg in optimizer_tok.param_groups[1:]:
         replicated_params.extend(pg["params"])
     replicated_params.extend(scalar_params)
-    replicated_params.extend(diffusion_scalar_params)
-    replicated_params.extend(diffusion_head_params)
 
     optimizer_head = None
     head_params: list[Tensor] = []
@@ -1965,7 +1879,7 @@ def main() -> None:
             fused=True,
         )
         replicated_params.extend(head_params)
-    optimizers: list[torch.optim.Optimizer] = [optimizer_tok, optimizer_muon, optimizer_scalar, optimizer_diffusion]
+    optimizers: list[torch.optim.Optimizer] = [optimizer_tok, optimizer_muon, optimizer_scalar]
     if optimizer_head is not None:
         optimizers.append(optimizer_head)
     comm_profiler = StepCommProfiler(
@@ -1976,22 +1890,8 @@ def main() -> None:
         bank_params=matrix_params,
     )
     n_params = sum(p.numel() for p in base_model.parameters())
-    diffusion_params = (
-        base_model.mask_embed.numel()
-        + sum(p.numel() for p in base_model.time_proj.parameters())
-        + (base_model.latent_proj.weight.numel() if base_model.latent_proj is not None else 0)
-    )
     prompt_len, selfgen_seq_len = _effective_selfgen_lengths(args)
     log0(f"model_params:{n_params}")
-    log0(
-        f"diffusion_aux:prob:{args.diffusion_aux_prob:.2f} "
-        f"weight:{args.diffusion_loss_weight:.4f} start_frac:{args.diffusion_start_frac:.2f} stop_frac:{args.diffusion_stop_frac:.2f} "
-        f"subsample:{args.diffusion_subsample_frac:.2f} objective:latent_mse params:{diffusion_params}"
-    )
-    log0(
-        f"diffusion_decay:scalar_wd:{args.diffusion_scalar_wd:.4f} "
-        f"head_wd:{args.diffusion_head_wd:.4f}"
-    )
     xsa_layers = [i for i, b in enumerate(base_model.blocks) if b.attn.use_xsa]
     log0(f"XSA:last_{args.xsa_last_n} active_layers:{xsa_layers}")
     if args.attn_res:
@@ -2001,7 +1901,7 @@ def main() -> None:
     log0(f"attention_mode:gqa num_heads:{args.num_heads} num_kv_heads:{args.num_kv_heads}")
     log0(
         f"tie_embeddings:{args.tie_embeddings} embed_lr:{token_lr} "
-        f"head_lr:{args.head_lr if (head_params or diffusion_head_params) else 0.0} "
+        f"head_lr:{args.head_lr if head_params else 0.0} "
         f"matrix_lr:{args.matrix_lr} scalar_lr:{args.scalar_lr}"
     )
     log0(
@@ -2052,10 +1952,8 @@ def main() -> None:
             return max((1.0 - frac) / max(args.warmdown_frac, 1e-9), args.min_lr)
         return 1.0
     effective_warmup_steps = args.warmup_steps
-    has_diffusion = args.diffusion_loss_weight > 0.0 and args.diffusion_aux_prob > 0.0
     if args.skip_quant and args.screen_warmup_steps >= 0:
-        min_compile_paths = 2 if has_diffusion else 1
-        effective_warmup_steps = min(args.warmup_steps, max(args.screen_warmup_steps, min_compile_paths))
+        effective_warmup_steps = min(args.warmup_steps, max(args.screen_warmup_steps, 1))
         if effective_warmup_steps != args.warmup_steps:
             log0(f"screen_mode:warmup_steps {args.warmup_steps}->{effective_warmup_steps}")
     if effective_warmup_steps > 0:
@@ -2067,16 +1965,7 @@ def main() -> None:
             for micro_step in range(grad_accum_steps):
                 x, y = train_loader.next_batch(args.train_batch_tokens, grad_accum_steps)
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
-                    # Force both code paths through torch.compile during warmup:
-                    # step 0 → diffusion ON, step 1 → diffusion OFF (if diffusion configured)
-                    # This avoids a ~17s recompile on the first real diffusion step.
-                    if has_diffusion and warmup_step == 0:
-                        warmup_use_diffusion = True
-                    elif has_diffusion and warmup_step == 1:
-                        warmup_use_diffusion = False
-                    else:
-                        warmup_use_diffusion = has_diffusion and random.random() < args.diffusion_aux_prob
-                    warmup_loss = model(x, y, warmup_use_diffusion)
+                    warmup_loss = model(x, y)
                 (warmup_loss * grad_scale).backward()
             # All-reduce all grads for warmup (simple, not optimized)
             if distributed:
@@ -2097,8 +1986,6 @@ def main() -> None:
     swa_count = 0
     training_time_ms = 0.0
     stop_after_step: int | None = None
-    diffusion_cutoff_logged = False
-    diffusion_startup_logged = False
     torch.cuda.synchronize()
     t0 = time.perf_counter()
     step = 0
@@ -2146,29 +2033,7 @@ def main() -> None:
         for micro_step in range(grad_accum_steps):
             x, y = train_loader.next_batch(args.train_batch_tokens, grad_accum_steps)
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
-                before_start = (
-                    args.diffusion_start_frac > 0.0
-                    and max_wallclock_ms is not None
-                    and elapsed_ms < args.diffusion_start_frac * max_wallclock_ms
-                )
-                after_stop = not (
-                    args.diffusion_stop_frac >= 1.0
-                    or (max_wallclock_ms is not None and elapsed_ms < args.diffusion_stop_frac * max_wallclock_ms)
-                )
-                diffusion_active = not before_start and not after_stop
-                if not before_start and not diffusion_startup_logged and args.diffusion_start_frac > 0.0:
-                    log0(f"diffusion_startup:step:{step} elapsed_ms:{elapsed_ms:.0f} frac:{args.diffusion_start_frac:.2f}")
-                    diffusion_startup_logged = True
-                if after_stop and not diffusion_cutoff_logged:
-                    log0(f"diffusion_cutoff:step:{step} elapsed_ms:{elapsed_ms:.0f} frac:{args.diffusion_stop_frac:.2f}")
-                    diffusion_cutoff_logged = True
-                use_diffusion = (
-                    diffusion_active
-                    and args.diffusion_loss_weight > 0.0
-                    and args.diffusion_aux_prob > 0.0
-                    and random.random() < args.diffusion_aux_prob
-                )
-                loss = model(x, y, use_diffusion)
+                loss = model(x, y)
             train_loss += loss.detach()
             (loss * grad_scale).backward()
         train_loss /= grad_accum_steps
@@ -2182,7 +2047,7 @@ def main() -> None:
         if args.beta2_end > 0:
             b2_frac = min(step / max(args.iterations - 1, 1), 1.0)
             cur_beta2 = args.beta2 + (args.beta2_end - args.beta2) * b2_frac
-            for opt in [optimizer_tok, optimizer_scalar, optimizer_diffusion] + ([optimizer_head] if optimizer_head else []):
+            for opt in [optimizer_tok, optimizer_scalar] + ([optimizer_head] if optimizer_head else []):
                 for group in opt.param_groups:
                     group["betas"] = (args.beta1, cur_beta2)
         if args.grad_clip_norm > 0:
@@ -2204,7 +2069,6 @@ def main() -> None:
             replicated_reduce_ms = 1000.0 * (time.perf_counter() - t_replicated_reduce)
         optimizer_tok.step()
         optimizer_scalar.step()
-        optimizer_diffusion.step()
         if optimizer_head is not None:
             optimizer_head.step()
         # Phase 3: Wait for RS, local NS5, all-gather (banks processed last)
@@ -2257,14 +2121,7 @@ def main() -> None:
         f"DIAGNOSTIC post_train val_loss:{diag_val_loss:.4f} val_bpb:{diag_val_bpb:.4f} "
         f"eval_time:{1000.0 * (time.perf_counter() - t_diag):.0f}ms"
     )
-    full_state_dict = base_model.state_dict()
-    export_sd = {
-        k: v for k, v in full_state_dict.items()
-        if "latent_proj" not in k
-    }
-    excluded_aux = sum(int(t.numel()) for k, t in full_state_dict.items() if "latent_proj" in k)
-    if excluded_aux > 0:
-        log0(f"export_excluding_training_only_params:{excluded_aux}")
+    export_sd = base_model.state_dict()
     if master_process:
         torch.save(export_sd, "final_model.pt")
         model_bytes = os.path.getsize("final_model.pt")
@@ -2448,7 +2305,6 @@ def main() -> None:
         train_seq_len=args.train_seq_len, xsa_last_n=args.xsa_last_n,
         rope_dims=args.rope_dims, ln_scale=args.ln_scale,
         skip_gates_enabled=args.skip_gates_enabled,
-        diffusion_loss_weight=0.0, diffusion_aux_prob=0.0,
         parallel_start_layer=args.parallel_start_layer,
         recurrence_depth=args.recurrence_depth,
         recurrence_start=args.recurrence_start,
