@@ -1021,15 +1021,20 @@ class GPT(nn.Module):
     def _depth_attn(self, layer_outputs: tuple, query_idx: int) -> Tensor:
         """Attention Residuals: compute input as softmax-weighted sum of all prior layer outputs.
         layer_outputs: tuple of (B, S, D) tensors from layers 0..len-1.
+        Avoids materializing the (B, S, K, D) stack — scores are (B, S, K) only.
         """
         if len(layer_outputs) == 1:
             return layer_outputs[0]
-        h = torch.stack(layer_outputs, dim=2)  # (B, S, num_prior, D)
-        q = self.depth_queries[query_idx].to(dtype=h.dtype)  # (D,)
+        q = self.depth_queries[query_idx].to(dtype=layer_outputs[0].dtype)  # (D,)
         inv_sqrt_d = 1.0 / math.sqrt(q.numel())
-        scores = (h * q).sum(dim=-1) * inv_sqrt_d  # (B, S, num_prior)
-        weights = F.softmax(scores, dim=-1)  # (B, S, num_prior)
-        return (weights.unsqueeze(-1) * h).sum(dim=2)  # (B, S, D)
+        # Per-layer dot products → (B, S) each, stacked to (B, S, K) — no (B,S,K,D) alloc
+        scores = torch.stack([(out * q).sum(dim=-1) for out in layer_outputs], dim=-1) * inv_sqrt_d
+        weights = F.softmax(scores, dim=-1)  # (B, S, K)
+        # Weighted sum: accumulate (B,S,D) directly
+        result = weights[:, :, 0:1] * layer_outputs[0]
+        for j in range(1, len(layer_outputs)):
+            result = result + weights[:, :, j:j+1] * layer_outputs[j]
+        return result
 
     def _run_block(
         self,
@@ -1469,11 +1474,13 @@ class _HessianGPT(nn.Module):
                 if len(layer_outputs) == 1:
                     x_in = layer_outputs[0]
                 else:
-                    h = torch.stack(layer_outputs, dim=2)
-                    q = self.depth_queries[i].to(dtype=h.dtype)
-                    scores = (h * q).sum(dim=-1) * (1.0 / math.sqrt(q.numel()))
+                    q = self.depth_queries[i].to(dtype=layer_outputs[0].dtype)
+                    inv_sqrt_d = 1.0 / math.sqrt(q.numel())
+                    scores = torch.stack([(out * q).sum(dim=-1) for out in layer_outputs], dim=-1) * inv_sqrt_d
                     weights = F.softmax(scores, dim=-1)
-                    x_in = (weights.unsqueeze(-1) * h).sum(dim=2)
+                    x_in = weights[:, :, 0:1] * layer_outputs[0]
+                    for j in range(1, len(layer_outputs)):
+                        x_in = x_in + weights[:, :, j:j+1] * layer_outputs[j]
                 x = self.blocks[i](x_in, x_in)
                 layer_outputs = layer_outputs + (x,)
             x = self.final_norm(x)
