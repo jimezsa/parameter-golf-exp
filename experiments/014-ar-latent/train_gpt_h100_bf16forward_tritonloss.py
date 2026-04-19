@@ -290,12 +290,12 @@ def _resolve_triton_ce_block_n(vocab_size: int, vocab_chunk: int) -> int:
 
 if _TRITON_AVAILABLE:
     @triton.jit
-    def _triton_linear_softcap_ce_dlogits_kernel(
+    def _triton_linear_softcap_ce_grad_hidden_kernel(
         hidden_ptr,
         weight_ptr,
         targets_ptr,
         lse_ptr,
-        grad_logits_ptr,
+        grad_hidden_ptr,
         scale_ptr,
         num_rows,
         vocab_size,
@@ -304,60 +304,156 @@ if _TRITON_AVAILABLE:
         hidden_col_stride,
         weight_row_stride,
         weight_col_stride,
-        grad_row_stride,
-        grad_col_stride,
+        grad_hidden_row_stride,
+        grad_hidden_col_stride,
         softcap,
         BLOCK_M: tl.constexpr,
         BLOCK_N: tl.constexpr,
         BLOCK_K: tl.constexpr,
     ):
         pid_m = tl.program_id(0)
-        pid_n = tl.program_id(1)
         row_offsets = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-        col_offsets = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+        k_out_offsets = tl.program_id(1) * BLOCK_K + tl.arange(0, BLOCK_K)
         row_mask = row_offsets < num_rows
-        col_mask = col_offsets < vocab_size
+        k_out_mask = k_out_offsets < hidden_dim
         targets = tl.load(targets_ptr + row_offsets, mask=row_mask, other=0)
         lse = tl.load(lse_ptr + row_offsets, mask=row_mask, other=0.0)
         scale = tl.load(scale_ptr)
-        acc = tl.zeros((BLOCK_M, BLOCK_N), tl.float32)
+        grad_hidden_acc = tl.zeros((BLOCK_M, BLOCK_K), tl.float32)
 
-        for k_start in tl.range(0, hidden_dim, BLOCK_K):
-            k_offsets = k_start + tl.arange(0, BLOCK_K)
-            k_mask = k_offsets < hidden_dim
-            hidden_ptrs = (
-                hidden_ptr
-                + row_offsets[:, None] * hidden_row_stride
-                + k_offsets[None, :] * hidden_col_stride
-            )
-            weight_ptrs = (
+        for vocab_start in tl.range(0, vocab_size, BLOCK_N):
+            col_offsets = vocab_start + tl.arange(0, BLOCK_N)
+            col_mask = col_offsets < vocab_size
+            logits = tl.zeros((BLOCK_M, BLOCK_N), tl.float32)
+            for k_start in tl.range(0, hidden_dim, BLOCK_K):
+                k_offsets = k_start + tl.arange(0, BLOCK_K)
+                k_mask = k_offsets < hidden_dim
+                hidden_ptrs = (
+                    hidden_ptr
+                    + row_offsets[:, None] * hidden_row_stride
+                    + k_offsets[None, :] * hidden_col_stride
+                )
+                weight_ptrs = (
+                    weight_ptr
+                    + col_offsets[None, :] * weight_row_stride
+                    + k_offsets[:, None] * weight_col_stride
+                )
+                hidden_block = tl.load(hidden_ptrs, mask=row_mask[:, None] & k_mask[None, :], other=0.0)
+                weight_block = tl.load(weight_ptrs, mask=k_mask[:, None] & col_mask[None, :], other=0.0)
+                logits += tl.dot(hidden_block, weight_block)
+
+            soft_block = softcap * (2.0 / (1.0 + tl.exp(-2.0 * logits / softcap)) - 1.0)
+            grad_probs = tl.exp(soft_block - lse[:, None])
+            target_mask = row_mask[:, None] & col_mask[None, :] & (targets[:, None] == col_offsets[None, :])
+            grad_probs = grad_probs - target_mask.to(tl.float32)
+            soft_norm = soft_block / softcap
+            grad_logits = grad_probs * (1.0 - soft_norm * soft_norm) * scale
+            weight_slice_ptrs = (
                 weight_ptr
-                + col_offsets[None, :] * weight_row_stride
-                + k_offsets[:, None] * weight_col_stride
+                + col_offsets[:, None] * weight_row_stride
+                + k_out_offsets[None, :] * weight_col_stride
             )
-            hidden_block = tl.load(hidden_ptrs, mask=row_mask[:, None] & k_mask[None, :], other=0.0)
-            weight_block = tl.load(weight_ptrs, mask=k_mask[:, None] & col_mask[None, :], other=0.0)
-            acc += tl.dot(hidden_block, weight_block)
+            weight_slice = tl.load(
+                weight_slice_ptrs,
+                mask=col_mask[:, None] & k_out_mask[None, :],
+                other=0.0,
+            )
+            grad_hidden_acc += tl.dot(grad_logits, weight_slice)
 
-        soft_block = softcap * (2.0 / (1.0 + tl.exp(-2.0 * acc / softcap)) - 1.0)
-        grad_probs = tl.exp(soft_block - lse[:, None])
-        target_mask = row_mask[:, None] & col_mask[None, :] & (targets[:, None] == col_offsets[None, :])
-        grad_probs = grad_probs - target_mask.to(tl.float32)
-        soft_norm = soft_block / softcap
-        grad_logits = grad_probs * (1.0 - soft_norm * soft_norm) * scale
-        grad_ptrs = (
-            grad_logits_ptr
-            + row_offsets[:, None] * grad_row_stride
-            + col_offsets[None, :] * grad_col_stride
+        grad_hidden_ptrs = (
+            grad_hidden_ptr
+            + row_offsets[:, None] * grad_hidden_row_stride
+            + k_out_offsets[None, :] * grad_hidden_col_stride
         )
         tl.store(
-            grad_ptrs,
-            grad_logits.to(grad_logits_ptr.dtype.element_ty),
-            mask=row_mask[:, None] & col_mask[None, :],
+            grad_hidden_ptrs,
+            grad_hidden_acc.to(grad_hidden_ptr.dtype.element_ty),
+            mask=row_mask[:, None] & k_out_mask[None, :],
+        )
+
+    @triton.jit
+    def _triton_linear_softcap_ce_grad_weight_kernel(
+        hidden_ptr,
+        weight_ptr,
+        targets_ptr,
+        lse_ptr,
+        grad_weight_ptr,
+        scale_ptr,
+        num_rows,
+        vocab_size,
+        hidden_dim,
+        hidden_row_stride,
+        hidden_col_stride,
+        weight_row_stride,
+        weight_col_stride,
+        grad_weight_row_stride,
+        grad_weight_col_stride,
+        softcap,
+        BLOCK_M: tl.constexpr,
+        BLOCK_N: tl.constexpr,
+        BLOCK_K: tl.constexpr,
+    ):
+        col_offsets = tl.program_id(0) * BLOCK_N + tl.arange(0, BLOCK_N)
+        k_out_offsets = tl.program_id(1) * BLOCK_K + tl.arange(0, BLOCK_K)
+        col_mask = col_offsets < vocab_size
+        k_out_mask = k_out_offsets < hidden_dim
+        scale = tl.load(scale_ptr)
+        grad_weight_acc = tl.zeros((BLOCK_N, BLOCK_K), tl.float32)
+
+        for row_start in tl.range(0, num_rows, BLOCK_M):
+            row_offsets = row_start + tl.arange(0, BLOCK_M)
+            row_mask = row_offsets < num_rows
+            targets = tl.load(targets_ptr + row_offsets, mask=row_mask, other=0)
+            lse = tl.load(lse_ptr + row_offsets, mask=row_mask, other=0.0)
+            logits = tl.zeros((BLOCK_M, BLOCK_N), tl.float32)
+            for k_start in tl.range(0, hidden_dim, BLOCK_K):
+                k_offsets = k_start + tl.arange(0, BLOCK_K)
+                k_mask = k_offsets < hidden_dim
+                hidden_ptrs = (
+                    hidden_ptr
+                    + row_offsets[:, None] * hidden_row_stride
+                    + k_offsets[None, :] * hidden_col_stride
+                )
+                weight_ptrs = (
+                    weight_ptr
+                    + col_offsets[None, :] * weight_row_stride
+                    + k_offsets[:, None] * weight_col_stride
+                )
+                hidden_block = tl.load(hidden_ptrs, mask=row_mask[:, None] & k_mask[None, :], other=0.0)
+                weight_block = tl.load(weight_ptrs, mask=k_mask[:, None] & col_mask[None, :], other=0.0)
+                logits += tl.dot(hidden_block, weight_block)
+
+            soft_block = softcap * (2.0 / (1.0 + tl.exp(-2.0 * logits / softcap)) - 1.0)
+            grad_probs = tl.exp(soft_block - lse[:, None])
+            target_mask = row_mask[:, None] & col_mask[None, :] & (targets[:, None] == col_offsets[None, :])
+            grad_probs = grad_probs - target_mask.to(tl.float32)
+            soft_norm = soft_block / softcap
+            grad_logits = grad_probs * (1.0 - soft_norm * soft_norm) * scale
+            hidden_slice_ptrs = (
+                hidden_ptr
+                + row_offsets[:, None] * hidden_row_stride
+                + k_out_offsets[None, :] * hidden_col_stride
+            )
+            hidden_slice = tl.load(
+                hidden_slice_ptrs,
+                mask=row_mask[:, None] & k_out_mask[None, :],
+                other=0.0,
+            )
+            grad_weight_acc += tl.dot(tl.trans(grad_logits), hidden_slice)
+
+        grad_weight_ptrs = (
+            grad_weight_ptr
+            + col_offsets[:, None] * grad_weight_row_stride
+            + k_out_offsets[None, :] * grad_weight_col_stride
+        )
+        tl.store(
+            grad_weight_ptrs,
+            grad_weight_acc.to(grad_weight_ptr.dtype.element_ty),
+            mask=col_mask[:, None] & k_out_mask[None, :],
         )
 
 
-def _launch_triton_linear_softcap_ce_dlogits(
+def _launch_triton_linear_softcap_ce_grad_hidden(
     hidden: Tensor,
     weight: Tensor,
     targets: Tensor,
@@ -370,18 +466,18 @@ def _launch_triton_linear_softcap_ce_dlogits(
         raise RuntimeError("Triton is not available")
     num_rows, hidden_dim = hidden.shape
     vocab_size = weight.size(0)
-    grad_logits = torch.empty((num_rows, vocab_size), device=hidden.device, dtype=hidden.dtype)
+    grad_hidden = torch.empty_like(hidden)
     block_m = 8 if num_rows >= 8 else 1
     block_n = _resolve_triton_ce_block_n(vocab_size, vocab_chunk)
     block_k = 64 if hidden_dim % 64 == 0 else 32
     num_warps = 8 if block_n >= 256 else 4
-    grid = (triton.cdiv(num_rows, block_m), triton.cdiv(vocab_size, block_n))
-    _triton_linear_softcap_ce_dlogits_kernel[grid](
+    grid = (triton.cdiv(num_rows, block_m), triton.cdiv(hidden_dim, block_k))
+    _triton_linear_softcap_ce_grad_hidden_kernel[grid](
         hidden,
         weight,
         targets,
         lse,
-        grad_logits,
+        grad_hidden,
         scale,
         num_rows,
         vocab_size,
@@ -390,8 +486,8 @@ def _launch_triton_linear_softcap_ce_dlogits(
         hidden.stride(1),
         weight.stride(0),
         weight.stride(1),
-        grad_logits.stride(0),
-        grad_logits.stride(1),
+        grad_hidden.stride(0),
+        grad_hidden.stride(1),
         softcap,
         BLOCK_M=block_m,
         BLOCK_N=block_n,
@@ -399,7 +495,52 @@ def _launch_triton_linear_softcap_ce_dlogits(
         num_warps=num_warps,
         num_stages=2,
     )
-    return grad_logits
+    return grad_hidden
+
+
+def _launch_triton_linear_softcap_ce_grad_weight(
+    hidden: Tensor,
+    weight: Tensor,
+    targets: Tensor,
+    lse: Tensor,
+    softcap: float,
+    scale: Tensor,
+    vocab_chunk: int,
+) -> Tensor:
+    if not _TRITON_AVAILABLE:
+        raise RuntimeError("Triton is not available")
+    num_rows, hidden_dim = hidden.shape
+    vocab_size = weight.size(0)
+    grad_weight = torch.empty_like(weight)
+    block_m = 8 if num_rows >= 8 else 1
+    block_n = _resolve_triton_ce_block_n(vocab_size, vocab_chunk)
+    block_k = 64 if hidden_dim % 64 == 0 else 32
+    num_warps = 8 if block_n >= 256 else 4
+    grid = (triton.cdiv(vocab_size, block_n), triton.cdiv(hidden_dim, block_k))
+    _triton_linear_softcap_ce_grad_weight_kernel[grid](
+        hidden,
+        weight,
+        targets,
+        lse,
+        grad_weight,
+        scale,
+        num_rows,
+        vocab_size,
+        hidden_dim,
+        hidden.stride(0),
+        hidden.stride(1),
+        weight.stride(0),
+        weight.stride(1),
+        grad_weight.stride(0),
+        grad_weight.stride(1),
+        softcap,
+        BLOCK_M=block_m,
+        BLOCK_N=block_n,
+        BLOCK_K=block_k,
+        num_warps=num_warps,
+        num_stages=2,
+    )
+    return grad_weight
 
 
 class _TritonLinearSoftcapCrossEntropy(torch.autograd.Function):
@@ -429,18 +570,28 @@ class _TritonLinearSoftcapCrossEntropy(torch.autograd.Function):
         num_rows = hidden.size(0)
         needs_hidden, needs_weight = ctx.needs_input_grad[:2]
         scale = (grad_output.to(device=hidden.device, dtype=torch.float32) / max(num_rows, 1)).reshape(1)
-        # Materialize BF16 dlogits once, then let GEMMs run on tensor cores.
-        grad_logits = _launch_triton_linear_softcap_ce_dlogits(
-            hidden,
-            weight,
-            targets,
-            lse,
-            ctx.softcap,
-            scale,
-            ctx.vocab_chunk,
-        )
-        grad_hidden = torch.mm(grad_logits, weight) if needs_hidden else None
-        grad_weight = torch.mm(grad_logits.transpose(0, 1), hidden) if needs_weight else None
+        grad_hidden = None
+        grad_weight = None
+        if needs_hidden:
+            grad_hidden = _launch_triton_linear_softcap_ce_grad_hidden(
+                hidden,
+                weight,
+                targets,
+                lse,
+                ctx.softcap,
+                scale,
+                ctx.vocab_chunk,
+            )
+        if needs_weight:
+            grad_weight = _launch_triton_linear_softcap_ce_grad_weight(
+                hidden,
+                weight,
+                targets,
+                lse,
+                ctx.softcap,
+                scale,
+                ctx.vocab_chunk,
+            )
         return grad_hidden, grad_weight, None, None, None
 
 
