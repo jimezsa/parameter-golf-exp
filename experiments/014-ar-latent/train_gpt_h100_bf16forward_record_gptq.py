@@ -110,8 +110,8 @@ class Hyperparameters:
     embed_bits = int(os.environ.get("EMBED_BITS", 8))
     matrix_clip_sigmas = float(os.environ.get("MATRIX_CLIP_SIGMAS", 12.85))
     embed_clip_sigmas = float(os.environ.get("EMBED_CLIP_SIGMAS", 20.0))
-    diffusion_scalar_wd = float(os.environ.get("DIFFUSION_SCALAR_WD", "0.08"))
-    diffusion_head_wd = float(os.environ.get("DIFFUSION_HEAD_WD", "0.08"))
+    diffusion_scalar_wd = float(os.environ.get("DIFFUSION_SCALAR_WD", os.environ.get("ADAM_WD", "0.02")))
+    diffusion_head_wd = float(os.environ.get("DIFFUSION_HEAD_WD", "0.00"))
     compressor = os.environ.get("COMPRESSOR", "brotli")
     parallel_start_layer = int(os.environ.get("PARALLEL_START_LAYER", 7))  # layers >= this use parallel residuals
     recurrence_depth = int(os.environ.get("RECURRENCE_DEPTH", 1))  # 1 = no recurrence, 2 = one extra pass through zone
@@ -1909,7 +1909,12 @@ def main() -> None:
         swigelu=args.swigelu,
         swigelu_hidden_dim=args.swigelu_hidden_dim,
     ).to(device).bfloat16()
-    # Forward params stay BF16 to avoid hot-path casts; FP32 master copies live in the optimizers.
+    # Keep bank weights BF16 in the compiled hot path, but restore small/control and CastedLinear
+    # parameters to FP32 to match the numerically sensitive exp013 training path.
+    for module in base_model.modules():
+        if isinstance(module, CastedLinear):
+            module.float()
+    restore_low_dim_params_to_fp32(base_model)
     compiled_model = torch.compile(base_model, dynamic=False, fullgraph=True)
     model = compiled_model
 
@@ -1934,9 +1939,9 @@ def main() -> None:
     if base_model.latent_proj is not None:
         diffusion_head_model_params.append(base_model.latent_proj.weight)
     matrix_params, matrix_master_pairs = build_master_param_copies(matrix_model_params)
-    scalar_params, scalar_master_pairs = build_master_param_copies(scalar_model_params)
-    diffusion_scalar_params, diffusion_scalar_master_pairs = build_master_param_copies(diffusion_scalar_model_params)
-    diffusion_head_params, diffusion_head_master_pairs = build_master_param_copies(diffusion_head_model_params)
+    scalar_params = scalar_model_params
+    diffusion_scalar_params = diffusion_scalar_model_params
+    diffusion_head_params = diffusion_head_model_params
     optimizer_tok = torch.optim.AdamW(
         tok_params,
         betas=(args.beta1, args.beta2),
@@ -1993,7 +1998,7 @@ def main() -> None:
     head_model_params: list[Tensor] = []
     if base_model.lm_head is not None:
         head_model_params.append(base_model.lm_head.weight)
-    head_params, head_master_pairs = build_master_param_copies(head_model_params)
+    head_params = head_model_params
     if head_params:
         optimizer_head = torch.optim.Adam(
             [{"params": head_params, "lr": args.head_lr, "base_lr": args.head_lr}],
@@ -2002,13 +2007,7 @@ def main() -> None:
             fused=True,
         )
         replicated_params.extend(head_params)
-    master_param_pairs = (
-        matrix_master_pairs
-        + scalar_master_pairs
-        + diffusion_scalar_master_pairs
-        + diffusion_head_master_pairs
-        + head_master_pairs
-    )
+    master_param_pairs = matrix_master_pairs
     optimizers: list[torch.optim.Optimizer] = [optimizer_tok, optimizer_muon, optimizer_scalar, optimizer_diffusion]
     if optimizer_head is not None:
         optimizers.append(optimizer_head)
@@ -2061,7 +2060,7 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
-    log0("forward_params:bf16 optimizer_masters:fp32")
+    log0("forward_params:banks_bf16 casted_linear_fp32 controls_fp32 optimizer_masters:matrix_only")
     comm_profiler.log_static(log0)
     if args.weight_share:
         log0(f"weight_share:enabled (2x effective depth = {args.num_layers * 2} layers from {args.num_layers} physical)")
