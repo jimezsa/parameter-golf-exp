@@ -869,6 +869,40 @@ def _depth_attn_mix(sources: tuple[Tensor, ...], query: Tensor) -> Tensor:
     weights = F.softmax(logits, dim=0)
     return torch.einsum("kbt,kbtd->btd", weights, values)
 
+
+def _depth_attn_block_phase1(
+    completed_blocks: tuple[Tensor, ...],
+    queries: Tensor,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Batch inter-block reads once per block, following the paper's two-phase Block AttnRes schedule."""
+    values = torch.stack(completed_blocks, dim=0)  # (N, B, T, D)
+    keys = F.rms_norm(values, (values.size(-1),))
+    logits = torch.einsum("sd,nbtd->snbt", queries.to(dtype=values.dtype), keys)
+    max_logits = logits.amax(dim=1)  # (S, B, T)
+    weights = torch.exp(logits - max_logits[:, None, :, :])
+    weight_sums = weights.sum(dim=1)  # (S, B, T)
+    value_sums = torch.einsum("snbt,nbtd->sbtd", weights, values)  # (S, B, T, D)
+    return value_sums, weight_sums, max_logits
+
+
+def _depth_attn_block_merge(
+    inter_value_sum: Tensor,
+    inter_weight_sum: Tensor,
+    inter_max_logit: Tensor,
+    partial_block: Tensor | None,
+    query: Tensor,
+) -> Tensor:
+    if partial_block is None:
+        return inter_value_sum / inter_weight_sum[..., None]
+    partial_key = F.rms_norm(partial_block, (partial_block.size(-1),))
+    partial_logit = torch.einsum("d,btd->bt", query.to(dtype=partial_block.dtype), partial_key)
+    merged_max = torch.maximum(inter_max_logit, partial_logit)
+    inter_scale = torch.exp(inter_max_logit - merged_max)
+    partial_scale = torch.exp(partial_logit - merged_max)
+    denom = inter_scale * inter_weight_sum + partial_scale
+    numer = inter_scale[..., None] * inter_value_sum + partial_scale[..., None] * partial_block
+    return numer / denom[..., None]
+
 class Block(nn.Module):
     def __init__(
         self,
@@ -921,6 +955,29 @@ class Block(nn.Module):
             x_out = x_in + attn_contrib
             x_out = x_out + self.mlp_scale.to(dtype=x_out.dtype)[None, None, :] * self.mlp(self.mlp_norm(x_out) * self.ln_scale_factor, up_w, down_w)
         return x_out
+
+    def forward_attnres(
+        self,
+        x: Tensor,
+        q_w: Tensor,
+        k_w: Tensor,
+        v_w: Tensor,
+        out_w: Tensor,
+        up_w: Tensor,
+        down_w: Tensor,
+        is_causal: bool = True,
+    ) -> Tensor:
+        attn_out = self.attn(
+            self.attn_norm(x) * self.ln_scale_factor,
+            q_w, k_w, v_w, out_w,
+            is_causal=is_causal,
+        )
+        attn_contrib = self.attn_scale.to(dtype=x.dtype)[None, None, :] * attn_out
+        if self.parallel:
+            mlp_contrib = self.mlp_scale.to(dtype=x.dtype)[None, None, :] * self.mlp(self.mlp_norm(x) * self.ln_scale_factor, up_w, down_w)
+            return x + attn_contrib + mlp_contrib
+        x_out = x + attn_contrib
+        return x_out + self.mlp_scale.to(dtype=x_out.dtype)[None, None, :] * self.mlp(self.mlp_norm(x_out) * self.ln_scale_factor, up_w, down_w)
 
 
 class GPT(nn.Module):
@@ -1019,7 +1076,7 @@ class GPT(nn.Module):
                 block.attn.rope_dims = rope_dims
                 block.attn.rotary = Rotary(head_dim, base=rope_base, train_seq_len=train_seq_len, rope_dims=rope_dims)
         # Attention Residuals: per-layer pseudo-queries for depth attention
-        self.depth_queries = nn.Parameter(torch.randn(num_layers, model_dim) * 0.02) if attn_res else None
+        self.depth_queries = nn.Parameter(torch.zeros(num_layers, model_dim, dtype=torch.float32)) if attn_res else None
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
         if self.lm_head is not None:
@@ -1065,6 +1122,20 @@ class GPT(nn.Module):
             self.qo_bank[n + layer_idx], self.mlp_up_bank[layer_idx], self.mlp_down_bank[layer_idx],
             is_causal=is_causal)
 
+    def _run_block_attnres(
+        self,
+        layer_idx: int,
+        x: Tensor,
+        is_causal: bool = True,
+    ) -> Tensor:
+        n = self.num_layers
+        return self.blocks[layer_idx].forward_attnres(
+            x,
+            self.qo_bank[layer_idx], self.kv_bank[layer_idx], self.kv_bank[n + layer_idx],
+            self.qo_bank[n + layer_idx], self.mlp_up_bank[layer_idx], self.mlp_down_bank[layer_idx],
+            is_causal=is_causal,
+        )
+
     def _forward_hidden(self, input_ids: Tensor) -> Tensor:
         x = self.tok_emb(input_ids)
         x = F.rms_norm(x, (x.size(-1),))
@@ -1074,22 +1145,31 @@ class GPT(nn.Module):
         if self.attn_res:
             if self.attn_res_impl == "block":
                 completed_blocks = (x,)  # token embedding is always a depth source
-                partial_block = None
-                for i in range(self.num_layers):
-                    sources = completed_blocks if partial_block is None else completed_blocks + (partial_block,)
-                    x_in = self._depth_attn(sources, i)
-                    x = self._run_block(i, x_in, x0)
-                    layer_out = x - x_in
-                    partial_block = layer_out if partial_block is None else partial_block + layer_out
-                    is_block_end = ((i + 1) % self.attn_res_block_size == 0) or (i == self.num_layers - 1)
-                    if is_block_end:
-                        completed_blocks = completed_blocks + (partial_block,)
-                        partial_block = None
+                for block_start in range(0, self.num_layers, self.attn_res_block_size):
+                    block_end = min(block_start + self.attn_res_block_size, self.num_layers)
+                    block_queries = self.depth_queries[block_start:block_end]
+                    inter_value_sums, inter_weight_sums, inter_max_logits = _depth_attn_block_phase1(
+                        completed_blocks,
+                        block_queries,
+                    )
+                    partial_block = None
+                    for block_offset, i in enumerate(range(block_start, block_end)):
+                        x_in = _depth_attn_block_merge(
+                            inter_value_sums[block_offset],
+                            inter_weight_sums[block_offset],
+                            inter_max_logits[block_offset],
+                            partial_block,
+                            block_queries[block_offset],
+                        )
+                        x = self._run_block_attnres(i, x_in)
+                        layer_out = x - x_in
+                        partial_block = layer_out if partial_block is None else partial_block + layer_out
+                    completed_blocks = completed_blocks + (partial_block,)
             else:
                 layer_outputs = (x,)
                 for i in range(self.num_layers):
                     x_in = self._depth_attn(layer_outputs, i)
-                    x = self._run_block(i, x_in, x0)
+                    x = self._run_block_attnres(i, x_in)
                     layer_outputs = layer_outputs + (x - x_in,)
             return self.final_norm(x)
 
@@ -1445,6 +1525,15 @@ class _HessianBlock(nn.Module):
             x_out = x_out + self.mlp_scale.to(dtype=x_out.dtype)[None, None, :] * self.mlp(self.mlp_norm(x_out) * self.ln_scale_factor)
         return x_out
 
+    def forward_attnres(self, x):
+        attn_out = self.attn(self.attn_norm(x) * self.ln_scale_factor)
+        attn_contrib = self.attn_scale.to(dtype=x.dtype)[None, None, :] * attn_out
+        if self.parallel:
+            mlp_contrib = self.mlp_scale.to(dtype=x.dtype)[None, None, :] * self.mlp(self.mlp_norm(x) * self.ln_scale_factor)
+            return x + attn_contrib + mlp_contrib
+        x_out = x + attn_contrib
+        return x_out + self.mlp_scale.to(dtype=x_out.dtype)[None, None, :] * self.mlp(self.mlp_norm(x_out) * self.ln_scale_factor)
+
 class _HessianGPT(nn.Module):
     """Non-banked GPT model matching unbanked state dict keys for Hessian collection."""
     def __init__(self, vocab_size, num_layers, model_dim, num_heads, num_kv_heads,
@@ -1497,7 +1586,7 @@ class _HessianGPT(nn.Module):
         if xsa_last_n > 0:
             for i in range(max(0, num_layers - xsa_last_n), num_layers):
                 self.blocks[i].attn.use_xsa = True
-        self.depth_queries = nn.Parameter(torch.randn(num_layers, model_dim) * 0.02) if attn_res else None
+        self.depth_queries = nn.Parameter(torch.zeros(num_layers, model_dim, dtype=torch.float32)) if attn_res else None
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
     def forward(self, input_ids, target_ids):
@@ -1508,22 +1597,31 @@ class _HessianGPT(nn.Module):
         if self.attn_res:
             if self.attn_res_impl == "block":
                 completed_blocks = (x,)
-                partial_block = None
-                for i in range(self.num_layers):
-                    sources = completed_blocks if partial_block is None else completed_blocks + (partial_block,)
-                    x_in = _depth_attn_mix(sources, self.depth_queries[i])
-                    x = self.blocks[i](x_in, x0)
-                    layer_out = x - x_in
-                    partial_block = layer_out if partial_block is None else partial_block + layer_out
-                    is_block_end = ((i + 1) % self.attn_res_block_size == 0) or (i == self.num_layers - 1)
-                    if is_block_end:
-                        completed_blocks = completed_blocks + (partial_block,)
-                        partial_block = None
+                for block_start in range(0, self.num_layers, self.attn_res_block_size):
+                    block_end = min(block_start + self.attn_res_block_size, self.num_layers)
+                    block_queries = self.depth_queries[block_start:block_end]
+                    inter_value_sums, inter_weight_sums, inter_max_logits = _depth_attn_block_phase1(
+                        completed_blocks,
+                        block_queries,
+                    )
+                    partial_block = None
+                    for block_offset, i in enumerate(range(block_start, block_end)):
+                        x_in = _depth_attn_block_merge(
+                            inter_value_sums[block_offset],
+                            inter_weight_sums[block_offset],
+                            inter_max_logits[block_offset],
+                            partial_block,
+                            block_queries[block_offset],
+                        )
+                        x = self.blocks[i].forward_attnres(x_in)
+                        layer_out = x - x_in
+                        partial_block = layer_out if partial_block is None else partial_block + layer_out
+                    completed_blocks = completed_blocks + (partial_block,)
             else:
                 layer_outputs = (x,)
                 for i in range(self.num_layers):
                     x_in = _depth_attn_mix(layer_outputs, self.depth_queries[i])
-                    x = self.blocks[i](x_in, x0)
+                    x = self.blocks[i].forward_attnres(x_in)
                     layer_outputs = layer_outputs + (x - x_in,)
             x = self.final_norm(x)
             x_flat = x.reshape(-1, x.size(-1))
