@@ -19,11 +19,6 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from flash_attn_interface import flash_attn_func as flash_attn_3_func
-try:
-    from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
-    _LIGER_FUSED_CE = False  # disabled: .item() in Liger breaks torch.compile
-except ImportError:
-    _LIGER_FUSED_CE = False
 
 
 def _scale_default(one_gpu: str, eight_gpu: str) -> str:
@@ -1045,7 +1040,6 @@ class GPT(nn.Module):
         self.tie_embeddings = tie_embeddings
         self.tied_embed_init_std = tied_embed_init_std
         self.logit_softcap = logit_softcap
-        self._fused_ce = LigerFusedLinearCrossEntropyLoss(softcap=logit_softcap) if _LIGER_FUSED_CE else None
         self.diffusion_loss_weight = diffusion_loss_weight
         self.diffusion_aux_prob = diffusion_aux_prob
         self.diffusion_subsample_frac = diffusion_subsample_frac
@@ -1224,12 +1218,8 @@ class GPT(nn.Module):
         x = self._forward_hidden(input_ids)
         x_flat = x.reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
-        if self._fused_ce is not None:
-            proj_weight = self.tok_emb.weight if self.tie_embeddings else self.lm_head.weight
-            main_loss = self._fused_ce(x_flat, proj_weight, targets)
-        else:
-            logits = self._project_logits(x_flat)
-            main_loss = F.cross_entropy(logits.float(), targets, reduction="mean")
+        logits = self._project_logits(x_flat)
+        main_loss = F.cross_entropy(logits.float(), targets, reduction="mean")
         if self.training and run_aux_diffusion and self.diffusion_loss_weight > 0.0:
             main_loss = main_loss + self.diffusion_loss_weight * self._diffusion_loss(input_ids, target_ids, self.diffusion_subsample_frac)
         return main_loss
