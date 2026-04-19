@@ -90,6 +90,7 @@ experiments/014-ar-latent/train_gpt.py
 | v5 | 1.1827 | — | 170 | — | a2e3c4d | SwiGeLU activation (SWIGELU=1), DIFFUSION_STOP_FRAC=0.60. Beats v3 by 0.0040. |
 | v6 | 1.1817 | — | 170 | — | da9f1a0 | Wider diffusion window: DIFFUSION_START_FRAC=0.15, STOP=0.60. Beats v5 by 0.0010. |
 | v7 | 1.1918 | — | 796 | — | — | **Undertrained** (755/~3600 steps). Throttled pod (345 MHz GPU clock). Invalid — do not compare. |
+| v8 | FAIL | — | FAIL | — | 41dbbd6 | `train_gpt_h100.py` initial 1xH100 auto-accum variant OOM before step 0. Single-rank auto chose `GRAD_ACCUM_STEPS=1` while keeping `TRAIN_BATCH_TOKENS=786432`, triggering a 3.00 GiB compile-time allocation and exhausting 80 GB H100 memory. |
 
 ## Notes
 

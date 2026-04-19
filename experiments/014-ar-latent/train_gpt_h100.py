@@ -51,6 +51,7 @@ class Hyperparameters:
     warmup_steps = int(os.environ.get("WARMUP_STEPS", 20))
     train_batch_tokens = int(os.environ.get("TRAIN_BATCH_TOKENS", 786_432))
     grad_accum_steps = int(os.environ.get("GRAD_ACCUM_STEPS", "0"))  # 0 = auto
+    max_local_batch_tokens = int(os.environ.get("MAX_LOCAL_BATCH_TOKENS", _scale_default("196608", "98304")))
     train_seq_len = int(os.environ.get("TRAIN_SEQ_LEN", 2048))
     eval_seq_len = int(os.environ.get("EVAL_SEQ_LEN", 2048))
     max_wallclock_seconds = float(os.environ.get("MAX_WALLCLOCK_SECONDS", 600.0))
@@ -139,13 +140,22 @@ def log_hyperparameters(args: Hyperparameters, log0) -> None:
         log0(f"  {name:<{width}} : {value}")
 
 
-def resolve_grad_accum_steps(requested_steps: int, world_size: int, weight_share: bool) -> tuple[int, str]:
+def resolve_grad_accum_steps(
+    requested_steps: int,
+    train_batch_tokens: int,
+    max_local_batch_tokens: int,
+    world_size: int,
+    weight_share: bool,
+) -> tuple[int, str]:
     if requested_steps < 0:
         raise ValueError(f"GRAD_ACCUM_STEPS must be >= 0, got {requested_steps}")
     if requested_steps > 0:
         return requested_steps, "manual"
-    steps = 1 if world_size == 1 else max(1, 8 // world_size)
-    policy = "auto_h100_single_gpu" if world_size == 1 else "auto_8gpu_recipe"
+    if max_local_batch_tokens <= 0:
+        raise ValueError(f"MAX_LOCAL_BATCH_TOKENS must be positive, got {max_local_batch_tokens}")
+    denom = world_size * max_local_batch_tokens
+    steps = max(1, math.ceil(train_batch_tokens / max(denom, 1)))
+    policy = "auto_local_batch_cap"
     if weight_share:
         steps *= 2
         policy += "+weight_share"
@@ -1755,6 +1765,8 @@ def main() -> None:
         raise ValueError(f"WORLD_SIZE must be positive, got {world_size}")
     grad_accum_steps, grad_accum_policy = resolve_grad_accum_steps(
         args.grad_accum_steps,
+        args.train_batch_tokens,
+        args.max_local_batch_tokens,
         world_size,
         args.weight_share,
     )
