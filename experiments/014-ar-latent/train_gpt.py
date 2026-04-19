@@ -125,6 +125,19 @@ class Hyperparameters:
     skip_quant = bool(int(os.environ.get("SKIP_QUANT", "0")))  # skip post-training quantization pipeline
     weight_share = bool(int(os.environ.get("WEIGHT_SHARE", "0")))  # block-wise weight sharing: run each layer twice for 2x effective depth
 
+
+def log_hyperparameters(args: Hyperparameters, log0) -> None:
+    rows = [
+        (name, getattr(args, name))
+        for name, value in Hyperparameters.__dict__.items()
+        if not name.startswith("_") and not callable(value)
+    ]
+    width = max(len(name) for name, _ in rows)
+    log0("hyperparameters:")
+    for name, value in rows:
+        log0(f"  {name:<{width}} : {value}")
+
+
 # --- Batched Newton-Schulz orthogonalization ---
 
 def zeropower_via_newtonschulz5(G: Tensor, steps: int = 5, eps: float = 1e-7) -> Tensor:
@@ -1769,6 +1782,7 @@ def main() -> None:
         console=False,
     )
     log0("=" * 100, console=False)
+    log_hyperparameters(args, log0)
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
