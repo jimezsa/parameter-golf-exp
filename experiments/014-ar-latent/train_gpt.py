@@ -124,7 +124,6 @@ class Hyperparameters:
     recurrence_start_frac = float(os.environ.get("RECURRENCE_START_FRAC", 0.35))  # wallclock fraction before activating
     skip_quant = bool(int(os.environ.get("SKIP_QUANT", "0")))  # skip post-training quantization pipeline
     weight_share = bool(int(os.environ.get("WEIGHT_SHARE", "0")))  # block-wise weight sharing: run each layer twice for 2x effective depth
-    attn_res = bool(int(os.environ.get("ATTN_RES", "0")))  # Attention Residuals: replace fixed residual + U-Net skips with learned depth attention
 
 # --- Batched Newton-Schulz orthogonalization ---
 
@@ -535,7 +534,7 @@ CONTROL_TENSOR_NAME_PATTERNS = tuple(
     pattern
     for pattern in os.environ.get(
         "CONTROL_TENSOR_NAME_PATTERNS",
-        "attn_scale,attn_scales,mlp_scale,mlp_scales,resid_mix,resid_mixes,q_gain,skip_weight,skip_weights,skip_gates,depth_queries",
+        "attn_scale,attn_scales,mlp_scale,mlp_scales,resid_mix,resid_mixes,q_gain,skip_weight,skip_weights,skip_gates",
     ).split(",")
     if pattern
 )
@@ -938,12 +937,10 @@ class GPT(nn.Module):
         weight_share: bool = False,
         swigelu: bool = False,
         swigelu_hidden_dim: int = 1344,
-        attn_res: bool = False,
     ):
         super().__init__()
         self.weight_share = weight_share
         self.swigelu = swigelu
-        self.attn_res = attn_res
         if logit_softcap <= 0.0:
             raise ValueError(f"logit_softcap must be positive, got {logit_softcap}")
         if not 0.0 <= diffusion_aux_prob <= 1.0:
@@ -1013,8 +1010,6 @@ class GPT(nn.Module):
             for block in self.blocks:
                 block.attn.rope_dims = rope_dims
                 block.attn.rotary = Rotary(head_dim, base=rope_base, train_seq_len=train_seq_len, rope_dims=rope_dims)
-        # Attention Residuals: per-layer pseudo-queries for depth attention
-        self.depth_queries = nn.Parameter(torch.randn(num_layers, model_dim) * 0.02) if attn_res else None
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
         if self.lm_head is not None:
@@ -1045,17 +1040,6 @@ class GPT(nn.Module):
                 elif module.weight.ndim == 2 and module.weight.shape[0] >= 64 and module.weight.shape[1] >= 64:
                     nn.init.orthogonal_(module.weight, gain=1.0)
 
-    def _depth_attn(self, layer_outputs: list[Tensor], query_idx: int) -> Tensor:
-        """Attention Residuals: compute input as softmax-weighted sum of all prior layer outputs."""
-        if len(layer_outputs) == 1:
-            return layer_outputs[0]
-        H = torch.stack(layer_outputs, dim=2)  # (B, S, num_prior, D)
-        q = self.depth_queries[query_idx].to(dtype=H.dtype)  # (D,)
-        inv_sqrt_d = 1.0 / math.sqrt(q.numel())
-        scores = (H * q).sum(dim=-1) * inv_sqrt_d  # (B, S, num_prior)
-        weights = F.softmax(scores, dim=-1)  # (B, S, num_prior)
-        return (weights.unsqueeze(-1) * H).sum(dim=2)  # (B, S, D)
-
     def _run_block(
         self,
         layer_idx: int,
@@ -1080,17 +1064,6 @@ class GPT(nn.Module):
         x = x_override if x_override is not None else self.tok_emb(input_ids)
         x = F.rms_norm(x, (x.size(-1),))
         x0 = x
-
-        # --- Attention Residuals path: flat sequential with depth attention ---
-        if self.attn_res:
-            layer_outputs: list[Tensor] = [x]
-            for i in range(self.num_layers):
-                x_in = self._depth_attn(layer_outputs, i)
-                x = self._run_block(i, x_in, x_in, is_causal, t_emb)
-                layer_outputs.append(x)
-            return self.final_norm(x)
-
-        # --- Standard U-Net path ---
         skips: list[Tensor] = []
         n_enc = self.num_encoder_layers
         rec_start = self.recurrence_start
@@ -1475,14 +1448,12 @@ class _HessianGPT(nn.Module):
                  parallel_start_layer=999,
                  recurrence_depth=1, recurrence_start=3, recurrence_end=5,
                  weight_share=False,
-                 swigelu=False, swigelu_hidden_dim=1344,
-                 attn_res=False):
+                 swigelu=False, swigelu_hidden_dim=1344):
         super().__init__()
         self.tie_embeddings = tie_embeddings
         self.logit_softcap = logit_softcap
         self.num_layers = num_layers
         self.weight_share = weight_share
-        self.attn_res = attn_res
         self.recurrence_depth = recurrence_depth
         self.recurrence_start = recurrence_start
         self.recurrence_end = recurrence_end
@@ -1510,34 +1481,12 @@ class _HessianGPT(nn.Module):
         if xsa_last_n > 0:
             for i in range(max(0, num_layers - xsa_last_n), num_layers):
                 self.blocks[i].attn.use_xsa = True
-        self.depth_queries = nn.Parameter(torch.randn(num_layers, model_dim) * 0.02) if attn_res else None
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
     def forward(self, input_ids, target_ids):
         x = self.tok_emb(input_ids)
         x = F.rms_norm(x, (x.size(-1),))
         x0 = x
-        # --- Attention Residuals path ---
-        if self.attn_res:
-            layer_outputs = [x]
-            for i in range(self.num_layers):
-                if len(layer_outputs) == 1:
-                    x_in = layer_outputs[0]
-                else:
-                    H = torch.stack(layer_outputs, dim=2)
-                    q = self.depth_queries[i].to(dtype=H.dtype)
-                    scores = (H * q).sum(dim=-1) * (1.0 / math.sqrt(q.numel()))
-                    weights = F.softmax(scores, dim=-1)
-                    x_in = (weights.unsqueeze(-1) * H).sum(dim=2)
-                x = self.blocks[i](x_in, x_in)
-                layer_outputs.append(x)
-            x = self.final_norm(x)
-            x_flat = x.reshape(-1, x.size(-1))
-            targets = target_ids.reshape(-1)
-            logits_proj = F.linear(x_flat, self.tok_emb.weight) if self.tie_embeddings else self.lm_head(x_flat)
-            logits = self.logit_softcap * torch.tanh(logits_proj / self.logit_softcap)
-            return F.cross_entropy(logits.float(), targets, reduction="mean")
-        # --- Standard U-Net path ---
         skips = []
         for i in range(self.num_encoder_layers):
             x = self.blocks[i](x, x0)
@@ -1861,7 +1810,6 @@ def main() -> None:
         weight_share=args.weight_share,
         swigelu=args.swigelu,
         swigelu_hidden_dim=args.swigelu_hidden_dim,
-        attn_res=args.attn_res,
     ).to(device).bfloat16()
     # Banks stay FP32 (like CastedLinear weights), cast to BF16 in forward
     base_model.qo_bank.data = base_model.qo_bank.data.float()
@@ -1887,14 +1835,10 @@ def main() -> None:
         for name, p in block_named_params
         if p.ndim < 2 or any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
     ]
-    if not args.attn_res:
-        # U-Net skip params only trained when AttnRes is off
-        if base_model.skip_weights.numel() > 0:
-            scalar_params.append(base_model.skip_weights)
-        if base_model.skip_gates is not None and base_model.skip_gates.numel() > 0:
-            scalar_params.append(base_model.skip_gates)
-    if base_model.depth_queries is not None:
-        scalar_params.append(base_model.depth_queries)
+    if base_model.skip_weights.numel() > 0:
+        scalar_params.append(base_model.skip_weights)
+    if base_model.skip_gates is not None and base_model.skip_gates.numel() > 0:
+        scalar_params.append(base_model.skip_gates)
     diffusion_scalar_params = [base_model.mask_embed, base_model.time_proj.weight]
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
     tok_params = [{"params": [base_model.tok_emb.weight], "lr": token_lr, "base_lr": token_lr}]
@@ -1994,8 +1938,6 @@ def main() -> None:
     )
     xsa_layers = [i for i, b in enumerate(base_model.blocks) if b.attn.use_xsa]
     log0(f"XSA:last_{args.xsa_last_n} active_layers:{xsa_layers}")
-    if args.attn_res:
-        log0(f"attn_res:enabled depth_queries:{base_model.depth_queries.numel()} (replaces U-Net skips)")
     log0(f"world_size:{world_size} grad_accum_steps:{grad_accum_steps}")
     log0("sdp_backends:cudnn=False flash=True mem_efficient=False math=False")
     log0(f"attention_mode:gqa num_heads:{args.num_heads} num_kv_heads:{args.num_kv_heads}")
@@ -2295,7 +2237,6 @@ def main() -> None:
         weight_share=args.weight_share,
         swigelu=args.swigelu,
         swigelu_hidden_dim=args.swigelu_hidden_dim,
-        attn_res=args.attn_res,
     ).to(device).bfloat16()
     for m in hessian_model.modules():
         if isinstance(m, CastedLinear):
@@ -2456,7 +2397,6 @@ def main() -> None:
         weight_share=args.weight_share,
         swigelu=args.swigelu,
         swigelu_hidden_dim=args.swigelu_hidden_dim,
-        attn_res=args.attn_res,
     ).to(device).bfloat16()
     eval_model.qo_bank.data = eval_model.qo_bank.data.float()
     eval_model.kv_bank.data = eval_model.kv_bank.data.float()
