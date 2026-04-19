@@ -118,6 +118,7 @@ class Hyperparameters:
     skip_quant = bool(int(os.environ.get("SKIP_QUANT", "0")))  # skip post-training quantization pipeline
     weight_share = bool(int(os.environ.get("WEIGHT_SHARE", "0")))  # block-wise weight sharing: run each layer twice for 2x effective depth
     attn_res = bool(int(os.environ.get("ATTN_RES", "1")))  # Attention Residuals: replace fixed residual + U-Net skips with learned depth attention (default ON for exp 015)
+    attn_res_impl = os.environ.get("ATTN_RES_IMPL", "streaming").strip().lower()  # streaming avoids H stack materialization; stacked can be faster if launch overhead dominates
 
 # --- Batched Newton-Schulz orthogonalization ---
 
@@ -926,11 +927,15 @@ class GPT(nn.Module):
         swigelu: bool = False,
         swigelu_hidden_dim: int = 1344,
         attn_res: bool = False,
+        attn_res_impl: str = "streaming",
     ):
         super().__init__()
         self.weight_share = weight_share
         self.swigelu = swigelu
         self.attn_res = attn_res
+        if attn_res_impl not in {"streaming", "stacked"}:
+            raise ValueError(f"Unsupported attn_res_impl={attn_res_impl!r}; expected 'streaming' or 'stacked'")
+        self.attn_res_impl = attn_res_impl
         if logit_softcap <= 0.0:
             raise ValueError(f"logit_softcap must be positive, got {logit_softcap}")
         self.tie_embeddings = tie_embeddings
@@ -1025,6 +1030,13 @@ class GPT(nn.Module):
         """
         if len(layer_outputs) == 1:
             return layer_outputs[0]
+        if self.attn_res_impl == "stacked":
+            h = torch.stack(layer_outputs, dim=2)  # (B, S, K, D)
+            q = self.depth_queries[query_idx].to(dtype=h.dtype)  # (D,)
+            inv_sqrt_d = 1.0 / math.sqrt(q.numel())
+            scores = (h * q).sum(dim=-1) * inv_sqrt_d  # (B, S, K)
+            weights = F.softmax(scores, dim=-1)
+            return (weights.unsqueeze(-1) * h).sum(dim=2)
         q = self.depth_queries[query_idx].to(dtype=layer_outputs[0].dtype)  # (D,)
         inv_sqrt_d = 1.0 / math.sqrt(q.numel())
         # Per-layer dot products → (B, S) each, stacked to (B, S, K) — no (B,S,K,D) alloc
@@ -1426,13 +1438,17 @@ class _HessianGPT(nn.Module):
                  recurrence_depth=1, recurrence_start=3, recurrence_end=5,
                  weight_share=False,
                  swigelu=False, swigelu_hidden_dim=1344,
-                 attn_res=False):
+                 attn_res=False,
+                 attn_res_impl="streaming"):
         super().__init__()
         self.tie_embeddings = tie_embeddings
         self.logit_softcap = logit_softcap
         self.num_layers = num_layers
         self.weight_share = weight_share
         self.attn_res = attn_res
+        if attn_res_impl not in {"streaming", "stacked"}:
+            raise ValueError(f"Unsupported attn_res_impl={attn_res_impl!r}; expected 'streaming' or 'stacked'")
+        self.attn_res_impl = attn_res_impl
         self.recurrence_depth = recurrence_depth
         self.recurrence_start = recurrence_start
         self.recurrence_end = recurrence_end
@@ -1473,6 +1489,13 @@ class _HessianGPT(nn.Module):
             for i in range(self.num_layers):
                 if len(layer_outputs) == 1:
                     x_in = layer_outputs[0]
+                elif self.attn_res_impl == "stacked":
+                    h = torch.stack(layer_outputs, dim=2)
+                    q = self.depth_queries[i].to(dtype=h.dtype)
+                    inv_sqrt_d = 1.0 / math.sqrt(q.numel())
+                    scores = (h * q).sum(dim=-1) * inv_sqrt_d
+                    weights = F.softmax(scores, dim=-1)
+                    x_in = (weights.unsqueeze(-1) * h).sum(dim=2)
                 else:
                     q = self.depth_queries[i].to(dtype=layer_outputs[0].dtype)
                     inv_sqrt_d = 1.0 / math.sqrt(q.numel())
@@ -1811,6 +1834,7 @@ def main() -> None:
         swigelu=args.swigelu,
         swigelu_hidden_dim=args.swigelu_hidden_dim,
         attn_res=args.attn_res,
+        attn_res_impl=args.attn_res_impl,
     ).to(device).bfloat16()
     # Banks stay FP32 (like CastedLinear weights), cast to BF16 in forward
     base_model.qo_bank.data = base_model.qo_bank.data.float()
@@ -1904,7 +1928,10 @@ def main() -> None:
     xsa_layers = [i for i, b in enumerate(base_model.blocks) if b.attn.use_xsa]
     log0(f"XSA:last_{args.xsa_last_n} active_layers:{xsa_layers}")
     if args.attn_res:
-        log0(f"attn_res:enabled depth_queries:{base_model.depth_queries.numel()} (replaces U-Net skips)")
+        log0(
+            f"attn_res:enabled impl:{args.attn_res_impl} "
+            f"depth_queries:{base_model.depth_queries.numel()} (replaces U-Net skips)"
+        )
     log0(f"world_size:{world_size} grad_accum_steps:{grad_accum_steps}")
     log0("sdp_backends:cudnn=False flash=True mem_efficient=False math=False")
     log0(f"attention_mode:gqa num_heads:{args.num_heads} num_kv_heads:{args.num_kv_heads}")
@@ -2162,6 +2189,7 @@ def main() -> None:
         swigelu=args.swigelu,
         swigelu_hidden_dim=args.swigelu_hidden_dim,
         attn_res=args.attn_res,
+        attn_res_impl=args.attn_res_impl,
     ).to(device).bfloat16()
     for m in hessian_model.modules():
         if isinstance(m, CastedLinear):
@@ -2322,6 +2350,7 @@ def main() -> None:
         swigelu=args.swigelu,
         swigelu_hidden_dim=args.swigelu_hidden_dim,
         attn_res=args.attn_res,
+        attn_res_impl=args.attn_res_impl,
     ).to(device).bfloat16()
     eval_model.qo_bank.data = eval_model.qo_bank.data.float()
     eval_model.kv_bank.data = eval_model.kv_bank.data.float()

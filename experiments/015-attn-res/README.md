@@ -21,6 +21,7 @@ Pure autoregressive training with Full Attention Residuals should match or beat 
 - `depth_queries` in `CONTROL_TENSOR_NAME_PATTERNS` for FP32 precision and quant passthrough
 - `_HessianGPT` mirrors the AttnRes forward path for correct GPTQ calibration
 - Inherits SwiGeLU (`SWIGELU=1`) from exp 014 v6
+- `ATTN_RES_IMPL` supports `streaming` (default, avoids `(B,S,K,D)` stack materialization) and `stacked` (useful to benchmark when kernel-launch overhead may dominate on H100)
 
 ## Run Config
 
@@ -71,6 +72,13 @@ Pure autoregressive training with Full Attention Residuals should match or beat 
 RUN_ID=exp015_v1 SEED=1337 SKIP_QUANT=1 ATTN_RES=1 SWIGELU=1 \
 torchrun --standalone --nproc_per_node=1 \
 experiments/015-attn-res/train_gpt.py
+```
+
+Fast kernel A/B check on the real box:
+
+```bash
+RUN_ID=exp015_streaming SKIP_QUANT=1 ATTN_RES=1 ATTN_RES_IMPL=streaming torchrun --standalone --nproc_per_node=1 experiments/015-attn-res/train_gpt.py
+RUN_ID=exp015_stacked   SKIP_QUANT=1 ATTN_RES=1 ATTN_RES_IMPL=stacked   torchrun --standalone --nproc_per_node=1 experiments/015-attn-res/train_gpt.py
 ```
 
 8xH100:
