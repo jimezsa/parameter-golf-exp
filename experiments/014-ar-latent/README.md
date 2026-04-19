@@ -102,6 +102,7 @@ Use this before running `experiments/014-ar-latent/train_gpt_h100_bf16forward_tr
 | v9 | FAIL | — | FAIL | — | 2a08b4c | `train_gpt_h100.py` second 1xH100 auto-batch attempt still OOMed before step 0. Token-cap auto chose `local_batch_tokens=196608` / `micro_batch_seqs=96`, and Inductor failed allocating a `(96, 2048, 2048)` BF16 buffer (~768 MiB). |
 | v10 | — | — | 1048 | — | 68ce02e | Throughput-only screen of `train_gpt_h100_bf16forward_tritonloss.py`. The Triton loss path ran, but step time regressed versus the BF16-forward baseline (`1048.22 ms` vs `737.33 ms`). |
 | v11 | — | — | 938 | — | de08646 | Throughput-only screen after replacing the chunked Python-loop backward with a Triton `dlogits` kernel plus GEMM gradients. Step time improved to `937.59 ms`, but is still slower than the BF16-forward baseline (`737.33 ms`). |
+| v12 | FAIL | — | FAIL | — | a990e3b | `train_gpt_h100_bf16forward_tritonloss.py` no-`grad_logits` Triton backward failed during `torch.compile` with `BackendCompilerFailed`: `a leaf Variable that requires grad is being used in an in-place operation`. |
 
 ## Notes
 

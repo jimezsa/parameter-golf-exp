@@ -466,7 +466,7 @@ def _launch_triton_linear_softcap_ce_grad_hidden(
         raise RuntimeError("Triton is not available")
     num_rows, hidden_dim = hidden.shape
     vocab_size = weight.size(0)
-    grad_hidden = torch.empty_like(hidden)
+    grad_hidden = torch.empty((num_rows, hidden_dim), device=hidden.device, dtype=hidden.dtype)
     block_m = 8 if num_rows >= 8 else 1
     block_n = _resolve_triton_ce_block_n(vocab_size, vocab_chunk)
     block_k = 64 if hidden_dim % 64 == 0 else 32
@@ -511,7 +511,7 @@ def _launch_triton_linear_softcap_ce_grad_weight(
         raise RuntimeError("Triton is not available")
     num_rows, hidden_dim = hidden.shape
     vocab_size = weight.size(0)
-    grad_weight = torch.empty_like(weight)
+    grad_weight = torch.empty((vocab_size, hidden_dim), device=weight.device, dtype=weight.dtype)
     block_m = 8 if num_rows >= 8 else 1
     block_n = _resolve_triton_ce_block_n(vocab_size, vocab_chunk)
     block_k = 64 if hidden_dim % 64 == 0 else 32
@@ -555,8 +555,10 @@ class _TritonLinearSoftcapCrossEntropy(torch.autograd.Function):
     ) -> Tensor:
         if vocab_chunk <= 0:
             raise ValueError(f"TRITON_CE_VOCAB_CHUNK must be positive, got {vocab_chunk}")
-        hidden = hidden.contiguous()
-        weight = weight.contiguous()
+        # Save detached buffers for the custom backward kernels so torch.compile
+        # does not treat Triton temporaries as in-place updates on leaf params.
+        hidden = hidden.detach().contiguous()
+        weight = weight.detach().contiguous()
         targets_i32 = targets.contiguous().to(torch.int32)
         losses, lse = _launch_triton_linear_softcap_ce_forward(hidden, weight, targets_i32, softcap)
         ctx.save_for_backward(hidden, weight, targets_i32, lse)
