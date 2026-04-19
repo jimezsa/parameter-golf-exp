@@ -1078,7 +1078,7 @@ class GPT(nn.Module):
                 for i in range(self.num_layers):
                     sources = completed_blocks if partial_block is None else completed_blocks + (partial_block,)
                     x_in = self._depth_attn(sources, i)
-                    x = self._run_block(i, x_in, x_in)
+                    x = self._run_block(i, x_in, x0)
                     layer_out = x - x_in
                     partial_block = layer_out if partial_block is None else partial_block + layer_out
                     is_block_end = ((i + 1) % self.attn_res_block_size == 0) or (i == self.num_layers - 1)
@@ -1089,7 +1089,7 @@ class GPT(nn.Module):
                 layer_outputs = (x,)
                 for i in range(self.num_layers):
                     x_in = self._depth_attn(layer_outputs, i)
-                    x = self._run_block(i, x_in, x_in)
+                    x = self._run_block(i, x_in, x0)
                     layer_outputs = layer_outputs + (x - x_in,)
             return self.final_norm(x)
 
@@ -1512,7 +1512,7 @@ class _HessianGPT(nn.Module):
                 for i in range(self.num_layers):
                     sources = completed_blocks if partial_block is None else completed_blocks + (partial_block,)
                     x_in = _depth_attn_mix(sources, self.depth_queries[i])
-                    x = self.blocks[i](x_in, x_in)
+                    x = self.blocks[i](x_in, x0)
                     layer_out = x - x_in
                     partial_block = layer_out if partial_block is None else partial_block + layer_out
                     is_block_end = ((i + 1) % self.attn_res_block_size == 0) or (i == self.num_layers - 1)
@@ -1523,7 +1523,7 @@ class _HessianGPT(nn.Module):
                 layer_outputs = (x,)
                 for i in range(self.num_layers):
                     x_in = _depth_attn_mix(layer_outputs, self.depth_queries[i])
-                    x = self.blocks[i](x_in, x_in)
+                    x = self.blocks[i](x_in, x0)
                     layer_outputs = layer_outputs + (x - x_in,)
             x = self.final_norm(x)
             x_flat = x.reshape(-1, x.size(-1))
