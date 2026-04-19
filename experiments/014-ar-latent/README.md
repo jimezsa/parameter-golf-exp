@@ -79,6 +79,14 @@ torchrun --standalone --nproc_per_node=1 \
 experiments/014-ar-latent/train_gpt.py
 ```
 
+Triton loss variant dependency:
+
+```bash
+python3 -m pip install triton
+```
+
+Use this before running `experiments/014-ar-latent/train_gpt_h100_bf16forward_tritonloss.py`.
+
 ## Iteration Results
 
 | Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Description |
