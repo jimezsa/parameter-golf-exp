@@ -118,7 +118,8 @@ class Hyperparameters:
     skip_quant = bool(int(os.environ.get("SKIP_QUANT", "0")))  # skip post-training quantization pipeline
     weight_share = bool(int(os.environ.get("WEIGHT_SHARE", "0")))  # block-wise weight sharing: run each layer twice for 2x effective depth
     attn_res = bool(int(os.environ.get("ATTN_RES", "1")))  # Attention Residuals: replace fixed residual + U-Net skips with learned depth attention (default ON for exp 015)
-    attn_res_impl = os.environ.get("ATTN_RES_IMPL", "streaming").strip().lower()  # streaming avoids H stack materialization; stacked can be faster if launch overhead dominates
+    attn_res_impl = os.environ.get("ATTN_RES_IMPL", "block").strip().lower()  # block is the practical default; full remains available as a comparison path
+    attn_res_block_size = int(os.environ.get("ATTN_RES_BLOCK_SIZE", 3))  # counts transformer blocks in this repo (paper counts attention+MLP sublayers)
 
 # --- Batched Newton-Schulz orthogonalization ---
 
@@ -846,6 +847,28 @@ class MLP(nn.Module):
         x = F.leaky_relu(F.linear(x, up_w.to(x.dtype)), negative_slope=0.5)
         return F.linear(x.square(), down_w.to(x.dtype))
 
+
+def _canonicalize_attn_res_impl(attn_res_impl: str) -> str:
+    impl = attn_res_impl.strip().lower()
+    if impl == "block":
+        return "block"
+    if impl in {"full", "stacked", "streaming"}:
+        return "full"
+    raise ValueError(
+        f"Unsupported attn_res_impl={attn_res_impl!r}; expected 'block', 'full', or legacy aliases 'stacked'/'streaming'"
+    )
+
+
+def _depth_attn_mix(sources: tuple[Tensor, ...], query: Tensor) -> Tensor:
+    """Depth-wise softmax attention over token/block sources using RMSNorm'd keys, per AttnRes."""
+    if len(sources) == 1:
+        return sources[0]
+    values = torch.stack(sources, dim=0)  # (K, B, T, D)
+    keys = F.rms_norm(values, (values.size(-1),))
+    logits = torch.einsum("d,kbtd->kbt", query.to(dtype=values.dtype), keys)
+    weights = F.softmax(logits, dim=0)
+    return torch.einsum("kbt,kbtd->btd", weights, values)
+
 class Block(nn.Module):
     def __init__(
         self,
@@ -927,15 +950,18 @@ class GPT(nn.Module):
         swigelu: bool = False,
         swigelu_hidden_dim: int = 1344,
         attn_res: bool = False,
-        attn_res_impl: str = "streaming",
+        attn_res_impl: str = "block",
+        attn_res_block_size: int = 3,
     ):
         super().__init__()
         self.weight_share = weight_share
         self.swigelu = swigelu
         self.attn_res = attn_res
-        if attn_res_impl not in {"streaming", "stacked"}:
-            raise ValueError(f"Unsupported attn_res_impl={attn_res_impl!r}; expected 'streaming' or 'stacked'")
-        self.attn_res_impl = attn_res_impl
+        self.attn_res_impl_raw = attn_res_impl
+        self.attn_res_impl = _canonicalize_attn_res_impl(attn_res_impl)
+        if attn_res_block_size < 1:
+            raise ValueError(f"attn_res_block_size must be >= 1, got {attn_res_block_size}")
+        self.attn_res_block_size = attn_res_block_size
         if logit_softcap <= 0.0:
             raise ValueError(f"logit_softcap must be positive, got {logit_softcap}")
         self.tie_embeddings = tie_embeddings
@@ -1023,30 +1049,8 @@ class GPT(nn.Module):
                 elif module.weight.ndim == 2 and module.weight.shape[0] >= 64 and module.weight.shape[1] >= 64:
                     nn.init.orthogonal_(module.weight, gain=1.0)
 
-    def _depth_attn(self, layer_outputs: tuple, query_idx: int) -> Tensor:
-        """Attention Residuals: compute input as softmax-weighted sum of all prior layer outputs.
-        layer_outputs: tuple of (B, S, D) tensors from layers 0..len-1.
-        Avoids materializing the (B, S, K, D) stack — scores are (B, S, K) only.
-        """
-        if len(layer_outputs) == 1:
-            return layer_outputs[0]
-        if self.attn_res_impl == "stacked":
-            h = torch.stack(layer_outputs, dim=2)  # (B, S, K, D)
-            q = self.depth_queries[query_idx].to(dtype=h.dtype)  # (D,)
-            inv_sqrt_d = 1.0 / math.sqrt(q.numel())
-            scores = (h * q).sum(dim=-1) * inv_sqrt_d  # (B, S, K)
-            weights = F.softmax(scores, dim=-1)
-            return (weights.unsqueeze(-1) * h).sum(dim=2)
-        q = self.depth_queries[query_idx].to(dtype=layer_outputs[0].dtype)  # (D,)
-        inv_sqrt_d = 1.0 / math.sqrt(q.numel())
-        # Per-layer dot products → (B, S) each, stacked to (B, S, K) — no (B,S,K,D) alloc
-        scores = torch.stack([(out * q).sum(dim=-1) for out in layer_outputs], dim=-1) * inv_sqrt_d
-        weights = F.softmax(scores, dim=-1)  # (B, S, K)
-        # Weighted sum: accumulate (B,S,D) directly
-        result = weights[:, :, 0:1] * layer_outputs[0]
-        for j in range(1, len(layer_outputs)):
-            result = result + weights[:, :, j:j+1] * layer_outputs[j]
-        return result
+    def _depth_attn(self, sources: tuple[Tensor, ...], query_idx: int) -> Tensor:
+        return _depth_attn_mix(sources, self.depth_queries[query_idx])
 
     def _run_block(
         self,
@@ -1068,11 +1072,25 @@ class GPT(nn.Module):
 
         # --- Attention Residuals path: flat sequential with depth attention ---
         if self.attn_res:
-            layer_outputs = (x,)
-            for i in range(self.num_layers):
-                x_in = self._depth_attn(layer_outputs, i)
-                x = self._run_block(i, x_in, x_in)
-                layer_outputs = layer_outputs + (x,)
+            if self.attn_res_impl == "block":
+                completed_blocks = (x,)  # token embedding is always a depth source
+                partial_block = None
+                for i in range(self.num_layers):
+                    sources = completed_blocks if partial_block is None else completed_blocks + (partial_block,)
+                    x_in = self._depth_attn(sources, i)
+                    x = self._run_block(i, x_in, x_in)
+                    layer_out = x - x_in
+                    partial_block = layer_out if partial_block is None else partial_block + layer_out
+                    is_block_end = ((i + 1) % self.attn_res_block_size == 0) or (i == self.num_layers - 1)
+                    if is_block_end:
+                        completed_blocks = completed_blocks + (partial_block,)
+                        partial_block = None
+            else:
+                layer_outputs = (x,)
+                for i in range(self.num_layers):
+                    x_in = self._depth_attn(layer_outputs, i)
+                    x = self._run_block(i, x_in, x_in)
+                    layer_outputs = layer_outputs + (x - x_in,)
             return self.final_norm(x)
 
         # --- Standard U-Net path ---
@@ -1439,16 +1457,19 @@ class _HessianGPT(nn.Module):
                  weight_share=False,
                  swigelu=False, swigelu_hidden_dim=1344,
                  attn_res=False,
-                 attn_res_impl="streaming"):
+                 attn_res_impl="block",
+                 attn_res_block_size=3):
         super().__init__()
         self.tie_embeddings = tie_embeddings
         self.logit_softcap = logit_softcap
         self.num_layers = num_layers
         self.weight_share = weight_share
         self.attn_res = attn_res
-        if attn_res_impl not in {"streaming", "stacked"}:
-            raise ValueError(f"Unsupported attn_res_impl={attn_res_impl!r}; expected 'streaming' or 'stacked'")
-        self.attn_res_impl = attn_res_impl
+        self.attn_res_impl_raw = attn_res_impl
+        self.attn_res_impl = _canonicalize_attn_res_impl(attn_res_impl)
+        if attn_res_block_size < 1:
+            raise ValueError(f"attn_res_block_size must be >= 1, got {attn_res_block_size}")
+        self.attn_res_block_size = attn_res_block_size
         self.recurrence_depth = recurrence_depth
         self.recurrence_start = recurrence_start
         self.recurrence_end = recurrence_end
@@ -1485,27 +1506,25 @@ class _HessianGPT(nn.Module):
         x0 = x
         # --- Attention Residuals path ---
         if self.attn_res:
-            layer_outputs = (x,)
-            for i in range(self.num_layers):
-                if len(layer_outputs) == 1:
-                    x_in = layer_outputs[0]
-                elif self.attn_res_impl == "stacked":
-                    h = torch.stack(layer_outputs, dim=2)
-                    q = self.depth_queries[i].to(dtype=h.dtype)
-                    inv_sqrt_d = 1.0 / math.sqrt(q.numel())
-                    scores = (h * q).sum(dim=-1) * inv_sqrt_d
-                    weights = F.softmax(scores, dim=-1)
-                    x_in = (weights.unsqueeze(-1) * h).sum(dim=2)
-                else:
-                    q = self.depth_queries[i].to(dtype=layer_outputs[0].dtype)
-                    inv_sqrt_d = 1.0 / math.sqrt(q.numel())
-                    scores = torch.stack([(out * q).sum(dim=-1) for out in layer_outputs], dim=-1) * inv_sqrt_d
-                    weights = F.softmax(scores, dim=-1)
-                    x_in = weights[:, :, 0:1] * layer_outputs[0]
-                    for j in range(1, len(layer_outputs)):
-                        x_in = x_in + weights[:, :, j:j+1] * layer_outputs[j]
-                x = self.blocks[i](x_in, x_in)
-                layer_outputs = layer_outputs + (x,)
+            if self.attn_res_impl == "block":
+                completed_blocks = (x,)
+                partial_block = None
+                for i in range(self.num_layers):
+                    sources = completed_blocks if partial_block is None else completed_blocks + (partial_block,)
+                    x_in = _depth_attn_mix(sources, self.depth_queries[i])
+                    x = self.blocks[i](x_in, x_in)
+                    layer_out = x - x_in
+                    partial_block = layer_out if partial_block is None else partial_block + layer_out
+                    is_block_end = ((i + 1) % self.attn_res_block_size == 0) or (i == self.num_layers - 1)
+                    if is_block_end:
+                        completed_blocks = completed_blocks + (partial_block,)
+                        partial_block = None
+            else:
+                layer_outputs = (x,)
+                for i in range(self.num_layers):
+                    x_in = _depth_attn_mix(layer_outputs, self.depth_queries[i])
+                    x = self.blocks[i](x_in, x_in)
+                    layer_outputs = layer_outputs + (x - x_in,)
             x = self.final_norm(x)
             x_flat = x.reshape(-1, x.size(-1))
             targets = target_ids.reshape(-1)
@@ -1835,6 +1854,7 @@ def main() -> None:
         swigelu_hidden_dim=args.swigelu_hidden_dim,
         attn_res=args.attn_res,
         attn_res_impl=args.attn_res_impl,
+        attn_res_block_size=args.attn_res_block_size,
     ).to(device).bfloat16()
     # Banks stay FP32 (like CastedLinear weights), cast to BF16 in forward
     base_model.qo_bank.data = base_model.qo_bank.data.float()
@@ -1928,8 +1948,16 @@ def main() -> None:
     xsa_layers = [i for i, b in enumerate(base_model.blocks) if b.attn.use_xsa]
     log0(f"XSA:last_{args.xsa_last_n} active_layers:{xsa_layers}")
     if args.attn_res:
+        num_blocks = math.ceil(args.num_layers / args.attn_res_block_size) if args.attn_res_impl == "block" else args.num_layers
+        impl_note = (
+            f"requested:{base_model.attn_res_impl_raw} canonical:{base_model.attn_res_impl} "
+            if base_model.attn_res_impl_raw != base_model.attn_res_impl else
+            f"impl:{base_model.attn_res_impl} "
+        )
         log0(
-            f"attn_res:enabled impl:{args.attn_res_impl} "
+            f"attn_res:enabled {impl_note}"
+            f"block_layers:{args.attn_res_block_size} "
+            f"num_blocks:{num_blocks} "
             f"depth_queries:{base_model.depth_queries.numel()} (replaces U-Net skips)"
         )
     log0(f"world_size:{world_size} grad_accum_steps:{grad_accum_steps}")
@@ -2190,6 +2218,7 @@ def main() -> None:
         swigelu_hidden_dim=args.swigelu_hidden_dim,
         attn_res=args.attn_res,
         attn_res_impl=args.attn_res_impl,
+        attn_res_block_size=args.attn_res_block_size,
     ).to(device).bfloat16()
     for m in hessian_model.modules():
         if isinstance(m, CastedLinear):
@@ -2351,6 +2380,7 @@ def main() -> None:
         swigelu_hidden_dim=args.swigelu_hidden_dim,
         attn_res=args.attn_res,
         attn_res_impl=args.attn_res_impl,
+        attn_res_block_size=args.attn_res_block_size,
     ).to(device).bfloat16()
     eval_model.qo_bank.data = eval_model.qo_bank.data.float()
     eval_model.kv_bank.data = eval_model.kv_bank.data.float()
