@@ -611,6 +611,24 @@ def linear_softcap_cross_entropy(
     return _baseline_linear_softcap_cross_entropy(hidden, weight, targets, softcap)
 
 
+@torch._dynamo.disable
+def linear_softcap_cross_entropy_eager_triton(
+    hidden: Tensor,
+    weight: Tensor,
+    targets: Tensor,
+    softcap: float,
+    vocab_chunk: int,
+) -> Tensor:
+    return linear_softcap_cross_entropy(
+        hidden,
+        weight,
+        targets,
+        softcap,
+        use_triton=True,
+        vocab_chunk=vocab_chunk,
+    )
+
+
 def resolve_grad_accum_steps(
     requested_steps: int,
     train_batch_tokens: int,
@@ -1707,13 +1725,12 @@ class GPT(nn.Module):
         targets = target_ids.reshape(-1)
         proj_weight = self._output_weight()
         if self.use_triton_fused_softcap_ce:
-            main_loss = linear_softcap_cross_entropy(
+            main_loss = linear_softcap_cross_entropy_eager_triton(
                 x_flat,
                 proj_weight,
                 targets,
                 self.logit_softcap,
-                use_triton=True,
-                vocab_chunk=self.triton_ce_vocab_chunk,
+                self.triton_ce_vocab_chunk,
             )
         elif self._fused_ce is not None:
             main_loss = self._fused_ce(x_flat, proj_weight, targets)
