@@ -51,8 +51,9 @@ class Hyperparameters:
     warmup_steps = int(os.environ.get("WARMUP_STEPS", 20))
     train_batch_tokens = int(os.environ.get("TRAIN_BATCH_TOKENS", 786_432))
     grad_accum_steps = int(os.environ.get("GRAD_ACCUM_STEPS", "0"))  # 0 = auto
-    max_local_batch_tokens = int(os.environ.get("MAX_LOCAL_BATCH_TOKENS", _scale_default("196608", "98304")))
     train_seq_len = int(os.environ.get("TRAIN_SEQ_LEN", 2048))
+    max_micro_batch_seqs = int(os.environ.get("MAX_MICRO_BATCH_SEQS", _scale_default("48", "48")))
+    max_local_batch_tokens = int(os.environ.get("MAX_LOCAL_BATCH_TOKENS", "0"))  # 0 = derive from max_micro_batch_seqs
     eval_seq_len = int(os.environ.get("EVAL_SEQ_LEN", 2048))
     max_wallclock_seconds = float(os.environ.get("MAX_WALLCLOCK_SECONDS", 600.0))
     qk_gain_init = float(os.environ.get("QK_GAIN_INIT", 5.0))
@@ -143,23 +144,36 @@ def log_hyperparameters(args: Hyperparameters, log0) -> None:
 def resolve_grad_accum_steps(
     requested_steps: int,
     train_batch_tokens: int,
+    train_seq_len: int,
     max_local_batch_tokens: int,
+    max_micro_batch_seqs: int,
     world_size: int,
     weight_share: bool,
-) -> tuple[int, str]:
+) -> tuple[int, str, int]:
     if requested_steps < 0:
         raise ValueError(f"GRAD_ACCUM_STEPS must be >= 0, got {requested_steps}")
     if requested_steps > 0:
-        return requested_steps, "manual"
-    if max_local_batch_tokens <= 0:
-        raise ValueError(f"MAX_LOCAL_BATCH_TOKENS must be positive, got {max_local_batch_tokens}")
-    denom = world_size * max_local_batch_tokens
+        return requested_steps, "manual", max_local_batch_tokens
+    if train_seq_len <= 0:
+        raise ValueError(f"TRAIN_SEQ_LEN must be positive, got {train_seq_len}")
+    if max_local_batch_tokens > 0:
+        effective_local_batch_tokens = max_local_batch_tokens
+        policy = "auto_local_batch_cap"
+    else:
+        if max_micro_batch_seqs <= 0:
+            raise ValueError(f"MAX_MICRO_BATCH_SEQS must be positive, got {max_micro_batch_seqs}")
+        effective_local_batch_tokens = max_micro_batch_seqs * train_seq_len
+        policy = "auto_micro_batch_seq_cap"
+    if effective_local_batch_tokens <= 0:
+        raise ValueError(
+            f"Effective local batch token cap must be positive, got {effective_local_batch_tokens}"
+        )
+    denom = world_size * effective_local_batch_tokens
     steps = max(1, math.ceil(train_batch_tokens / max(denom, 1)))
-    policy = "auto_local_batch_cap"
     if weight_share:
         steps *= 2
         policy += "+weight_share"
-    return steps, policy
+    return steps, policy, effective_local_batch_tokens
 
 
 # --- Batched Newton-Schulz orthogonalization ---
@@ -1763,10 +1777,12 @@ def main() -> None:
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     if world_size <= 0:
         raise ValueError(f"WORLD_SIZE must be positive, got {world_size}")
-    grad_accum_steps, grad_accum_policy = resolve_grad_accum_steps(
+    grad_accum_steps, grad_accum_policy, effective_local_batch_tokens = resolve_grad_accum_steps(
         args.grad_accum_steps,
         args.train_batch_tokens,
+        args.train_seq_len,
         args.max_local_batch_tokens,
+        args.max_micro_batch_seqs,
         world_size,
         args.weight_share,
     )
@@ -1988,7 +2004,7 @@ def main() -> None:
     log0(f"XSA:last_{args.xsa_last_n} active_layers:{xsa_layers}")
     log0(
         f"world_size:{world_size} grad_accum_steps:{grad_accum_steps} "
-        f"grad_accum_policy:{grad_accum_policy}"
+        f"grad_accum_policy:{grad_accum_policy} effective_local_batch_tokens:{effective_local_batch_tokens}"
     )
     log0("sdp_backends:cudnn=False flash=True mem_efficient=False math=False")
     log0(f"attention_mode:gqa num_heads:{args.num_heads} num_kv_heads:{args.num_kv_heads}")
