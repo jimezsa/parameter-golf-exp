@@ -113,7 +113,6 @@ class Hyperparameters:
     diffusion_scalar_wd = float(os.environ.get("DIFFUSION_SCALAR_WD", os.environ.get("ADAM_WD", "0.02")))
     diffusion_head_wd = float(os.environ.get("DIFFUSION_HEAD_WD", "0.00"))
     compressor = os.environ.get("COMPRESSOR", "brotli")
-    submission_size_target_bytes = int(os.environ.get("SUBMISSION_SIZE_TARGET_BYTES", "16000000"))
     parallel_start_layer = int(os.environ.get("PARALLEL_START_LAYER", 7))  # layers >= this use parallel residuals
     recurrence_depth = int(os.environ.get("RECURRENCE_DEPTH", 1))  # 1 = no recurrence, 2 = one extra pass through zone
     recurrence_start = int(os.environ.get("RECURRENCE_START", 3))  # first layer in recurrence zone
@@ -1767,113 +1766,6 @@ def _decompress_quant_payload(data: bytes, compressor: str) -> bytes:
         raise ValueError(f"Unknown compressor: {compressor!r}")
     return _byte_unshuffle(raw)
 
-
-def fit_quant_result_to_submission_size(
-    quant_result: dict[str, Tensor],
-    quant_meta: dict[str, object],
-    code_bytes: int,
-    target_bytes: int,
-    compressor: str,
-    log0,
-) -> tuple[dict[str, Tensor], int, int]:
-    def _measure(result: dict[str, Tensor]) -> tuple[int, int]:
-        buf = io.BytesIO()
-        torch.save({"w": result, "m": quant_meta}, buf)
-        quant_bytes = len(_compress_quant_payload(buf.getvalue(), compressor))
-        return quant_bytes, quant_bytes + code_bytes
-
-    quant_bytes, total_bytes = _measure(quant_result)
-    if target_bytes <= 0:
-        return quant_result, quant_bytes, total_bytes
-    log0(
-        f"submission_size_fit: target_bytes={target_bytes} code_bytes={code_bytes} "
-        f"quant_bytes={quant_bytes} total_bytes={total_bytes}"
-    )
-    if total_bytes <= target_bytes:
-        log0("submission_size_fit: already under target")
-        return quant_result, quant_bytes, total_bytes
-
-    prune_keys: list[str] = []
-    prune_idx: list[Tensor] = []
-    all_errors: list[Tensor] = []
-    for name, info in quant_meta.items():
-        if not (isinstance(info, str) and info.startswith("gptq (int")):
-            continue
-        qk, sk = name + ".q", name + ".scale"
-        if qk not in quant_result or sk not in quant_result:
-            continue
-        q, s = quant_result[qk], quant_result[sk]
-        ones_mask = q.abs() == 1
-        if not bool(ones_mask.any()):
-            continue
-        flat_idx = torch.arange(q.numel(), dtype=torch.long).reshape(q.shape)[ones_mask]
-        if s.ndim > 0:
-            row_idx = torch.arange(q.shape[0], dtype=torch.long).unsqueeze(1).expand_as(q)[ones_mask]
-            errors = s.float()[row_idx].pow(2)
-        else:
-            scale_sq = float(s.float().item()) ** 2
-            errors = torch.full((int(ones_mask.sum().item()),), scale_sq, dtype=torch.float32)
-        order = errors.argsort()
-        prune_keys.append(qk)
-        prune_idx.append(flat_idx[order])
-        all_errors.append(errors[order])
-    total_candidates = sum(int(errors.numel()) for errors in all_errors)
-    if total_candidates == 0:
-        log0("submission_size_fit: no +/-1 GPTQ coefficients available for pruning")
-        return quant_result, quant_bytes, total_bytes
-
-    group_lengths = torch.tensor([int(errors.numel()) for errors in all_errors], dtype=torch.long)
-    group_ids = torch.repeat_interleave(torch.arange(len(all_errors), dtype=torch.long), group_lengths)
-    group_offsets = torch.cumsum(
-        torch.cat([torch.zeros(1, dtype=torch.long), group_lengths[:-1]]),
-        dim=0,
-    )
-    global_order = torch.cat(all_errors).argsort()
-    sorted_group_ids = group_ids[global_order]
-    sorted_local_pos = global_order - group_offsets[sorted_group_ids]
-
-    def _apply_prune(n: int) -> dict[str, Tensor]:
-        tmp = {k: v.clone() for k, v in quant_result.items()}
-        if n <= 0:
-            return tmp
-        n = min(n, total_candidates)
-        selected_groups = sorted_group_ids[:n]
-        selected_local_pos = sorted_local_pos[:n]
-        for group_idx, key in enumerate(prune_keys):
-            mask = selected_groups == group_idx
-            if not bool(mask.any()):
-                continue
-            flat_indices = prune_idx[group_idx][selected_local_pos[mask]]
-            tmp[key].view(-1)[flat_indices] = 0
-        return tmp
-
-    full_pruned_result = _apply_prune(total_candidates)
-    full_quant_bytes, full_total_bytes = _measure(full_pruned_result)
-    log0(
-        f"submission_size_fit: +/-1_candidates={total_candidates} "
-        f"full_prune_quant_bytes={full_quant_bytes} full_prune_total_bytes={full_total_bytes}"
-    )
-    if full_total_bytes > target_bytes:
-        log0("submission_size_fit: target still not reachable after full +/-1 prune; applying full prune")
-        return full_pruned_result, full_quant_bytes, full_total_bytes
-
-    lo, hi = 0, total_candidates
-    while lo < hi:
-        mid = (lo + hi) // 2
-        _, mid_total_bytes = _measure(_apply_prune(mid))
-        if mid_total_bytes <= target_bytes:
-            hi = mid
-        else:
-            lo = mid + 1
-    fitted_result = _apply_prune(lo)
-    fitted_quant_bytes, fitted_total_bytes = _measure(fitted_result)
-    log0(
-        f"submission_size_fit: pruned={lo}/{total_candidates} "
-        f"({100.0 * lo / total_candidates:.2f}%) final_quant_bytes={fitted_quant_bytes} "
-        f"final_total_bytes={fitted_total_bytes}"
-    )
-    return fitted_result, fitted_quant_bytes, fitted_total_bytes
-
 # --- Training ---
 
 def main() -> None:
@@ -2387,10 +2279,10 @@ def main() -> None:
     excluded_aux = sum(int(t.numel()) for k, t in full_state_dict.items() if "latent_proj" in k)
     if excluded_aux > 0:
         log0(f"export_excluding_training_only_params:{excluded_aux}")
-    code_bytes = len(code.encode("utf-8"))
     if master_process:
         torch.save(export_sd, "final_model.pt")
         model_bytes = os.path.getsize("final_model.pt")
+        code_bytes = len(code.encode("utf-8"))
         log0(f"Serialized model: {model_bytes} bytes")
         log0(f"Code size: {code_bytes} bytes")
     if args.skip_quant:
@@ -2450,29 +2342,17 @@ def main() -> None:
     quant_result, quant_meta = mixed_quantize_int6(unbanked_sd, args, hessians=hessians)
     _t_quant_elapsed = time.perf_counter() - _t_quant_start
     log0(f"gptq:quantized {len(quant_meta)} layers in {_t_quant_elapsed:.1f}s")
+    quant_buf = io.BytesIO()
+    torch.save({"w": quant_result, "m": quant_meta}, quant_buf)
+    quant_raw = quant_buf.getvalue()
+    quant_blob = _compress_quant_payload(quant_raw, args.compressor)
     if master_process:
-        quant_result, _, _ = fit_quant_result_to_submission_size(
-            quant_result,
-            quant_meta,
-            code_bytes=code_bytes,
-            target_bytes=args.submission_size_target_bytes,
-            compressor=args.compressor,
-            log0=log0,
-        )
-        quant_buf = io.BytesIO()
-        torch.save({"w": quant_result, "m": quant_meta}, quant_buf)
-        quant_blob = _compress_quant_payload(quant_buf.getvalue(), args.compressor)
         with open("final_model.int6.ptz", "wb") as f:
             f.write(quant_blob)
         quant_file_bytes = len(quant_blob)
+        code_bytes = len(code.encode("utf-8"))
         log0(f"Serialized model mixed-quant+{args.compressor}: {quant_file_bytes} bytes")
-        total_submission_bytes = quant_file_bytes + code_bytes
-        log0(f"Total submission size mixed-quant+{args.compressor}: {total_submission_bytes} bytes")
-        if total_submission_bytes > args.submission_size_target_bytes:
-            log0(
-                f"submission_size_fit: over_target_by={total_submission_bytes - args.submission_size_target_bytes} "
-                f"target_bytes={args.submission_size_target_bytes}"
-            )
+        log0(f"Total submission size mixed-quant+{args.compressor}: {quant_file_bytes + code_bytes} bytes")
     if distributed:
         dist.barrier()
     with open("final_model.int6.ptz", "rb") as f:
