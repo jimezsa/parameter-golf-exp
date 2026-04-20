@@ -87,23 +87,17 @@ python3 -m pip install triton
 
 Use this before running `experiments/014-ar-latent/train_gpt_h100_bf16forward_tritonloss.py`.
 
-## Iteration Results
+## Iteration Results x1 H100
 
-| Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Description |
-|---------|---------|----------------|-----------------|---------------|--------|-------------|
-| v1 | 1.1881 | — | 166 | — | — | Baseline: DIFFUSION_STOP_FRAC=0.40, all other HPs from exp 013 v21 |
-| v2 | 1.1870 | — | 166 | — | — | DIFFUSION_STOP_FRAC=0.50 |
-| v3 | 1.1867 | — | 166 | — | — | DIFFUSION_STOP_FRAC=0.60, reproduces exp 013 v21 (1.1868). Gate 1 passed. |
-| v4 | 1.2798 | 1.2825 (sw) / 1.2980 (rt) | 1566 | 15,998,434 | — | Gate 2: full GPTQ w/ AR self-gen. **Pod bottleneck**: only 355 steps (vs ~3600 expected). Gap=+0.0027 sw, but undertrained — not directly comparable. Hessians 16.8s, AR calib 123.7s, quant 46.0s. |
-| v5 | 1.1827 | — | 170 | — | a2e3c4d | SwiGeLU activation (SWIGELU=1), DIFFUSION_STOP_FRAC=0.60. Beats v3 by 0.0040. |
-| v6 | 1.1817 | — | 170 | — | da9f1a0 | Wider diffusion window: DIFFUSION_START_FRAC=0.15, STOP=0.60. Beats v5 by 0.0010. |
-| v7 | 1.1918 | — | 796 | — | — | **Undertrained** (755/~3600 steps). Throttled pod (345 MHz GPU clock). Invalid — do not compare. |
-| v8 | FAIL | — | FAIL | — | 41dbbd6 | `train_gpt_h100.py` initial 1xH100 auto-accum variant OOM before step 0. Single-rank auto chose `GRAD_ACCUM_STEPS=1` while keeping `TRAIN_BATCH_TOKENS=786432`, triggering a 3.00 GiB compile-time allocation and exhausting 80 GB H100 memory. |
-| v9 | FAIL | — | FAIL | — | 2a08b4c | `train_gpt_h100.py` second 1xH100 auto-batch attempt still OOMed before step 0. Token-cap auto chose `local_batch_tokens=196608` / `micro_batch_seqs=96`, and Inductor failed allocating a `(96, 2048, 2048)` BF16 buffer (~768 MiB). |
-| v10 | — | — | 1048 | — | 68ce02e | Throughput-only screen of `train_gpt_h100_bf16forward_tritonloss.py`. The Triton loss path ran, but step time regressed versus the BF16-forward baseline (`1048.22 ms` vs `737.33 ms`). |
-| v11 | — | — | 938 | — | de08646 | Throughput-only screen after replacing the chunked Python-loop backward with a Triton `dlogits` kernel plus GEMM gradients. Step time improved to `937.59 ms`, but is still slower than the BF16-forward baseline (`737.33 ms`). |
-| v12 | FAIL | — | FAIL | — | a990e3b | `train_gpt_h100_bf16forward_tritonloss.py` no-`grad_logits` Triton backward failed during `torch.compile` with `BackendCompilerFailed`: `a leaf Variable that requires grad is being used in an in-place operation`. |
-| v13 | FAIL | — | FAIL | — | 823dfea | `train_gpt_h100_bf16forward_tritonloss.py` still failed under `torch.compile`/AOTAutograd with the same leaf-variable in-place error after the detached-buffer patch. |
+| Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Description                                            |
+| ------- | ------- | -------------- | -------------- | ------------- | ------ | ------------------------------------------------------ |
+| v1      | 1.1881  | —              | 166            | —             | —      | Baseline: 1. SWIGELU=12, ROPE_DIMS=32, NUM_KV_HEADS=8. |
+
+## Iteration Results x8 H100
+
+| Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Description                                            |
+| ------- | ------- | -------------- | -------------- | ------------- | ------ | ------------------------------------------------------ |
+| v1      | 1.0957  | 1.09482789     | 166            | 17164353      | —      | Baseline: 1. SWIGELU=12, ROPE_DIMS=32, NUM_KV_HEADS=8. |
 
 ## Notes
 
