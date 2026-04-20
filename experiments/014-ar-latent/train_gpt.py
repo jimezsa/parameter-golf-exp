@@ -96,7 +96,7 @@ class Hyperparameters:
     skip_gates_enabled = bool(int(os.environ.get("SKIP_GATES_ENABLED", "1")))
     diffusion_loss_weight = float(os.environ.get("DIFFUSION_LOSS_WEIGHT", 0.50))
     diffusion_aux_prob = float(os.environ.get("DIFFUSION_AUX_PROB", 0.03))
-    diffusion_stop_frac = float(os.environ.get("DIFFUSION_STOP_FRAC", 0.40))  # fraction of wallclock after which diffusion is disabled (1.0 = never stop)
+    diffusion_stop_frac = float(os.environ.get("DIFFUSION_STOP_FRAC", 0.60))  # fraction of wallclock after which diffusion is disabled (1.0 = never stop)
     diffusion_start_frac = float(os.environ.get("DIFFUSION_START_FRAC", 0.25))  # fraction of wallclock before which diffusion is disabled (0.0 = always on)
     diffusion_subsample_frac = float(os.environ.get("DIFFUSION_SUBSAMPLE_FRAC", 1.00))  # optional fraction of seq positions for latent MSE loss
     # GPTQ calibration
