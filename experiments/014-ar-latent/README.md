@@ -50,6 +50,14 @@ If you need to override either profile, pass env vars explicitly. Otherwise the 
 
 ## Run Commands
 
+- Data prep:
+
+```bash
+pip install brotli sentencepiece
+MATCHED_FINEWEB_REPO_ID=kevclark/parameter-golf python3 data/cached_challenge_fineweb.py --variant sp8192
+python3 data/cached_challenge_fineweb.py --variant sp8192
+```
+
 1xH100 baseline screen:
 
 ```bash
