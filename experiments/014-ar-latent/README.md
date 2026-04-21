@@ -15,6 +15,13 @@ Exp 013 remains the historical scratchpad for throughput probes and HP sweeps. E
 
 - `train_gpt.py` is the single baseline entrypoint for this experiment.
 
+## RoPE Variant Entrypoints
+
+- `train_gpt_xpos.py`: xPos-style rotary scaling on top of the Exp 014 baseline.
+- `train_gpt_layerwise_rope.py`: layerwise RoPE schedule that can ramp `ROPE_DIMS` and optionally `ROPE_BASE` across depth.
+- `train_gpt_headwise_rope.py`: headwise RoPE that rotates only a configurable prefix of attention head groups.
+- `train_gpt_yarn.py`: YaRN-style rotary rescaling for longer-context probes.
+
 ## Locked Baseline Defaults
 
 Shared defaults:
