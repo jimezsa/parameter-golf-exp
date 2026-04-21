@@ -22,6 +22,10 @@ Exp 013 remains the historical scratchpad for throughput probes and HP sweeps. E
 - `train_gpt_headwise_rope.py`: headwise RoPE that rotates only a configurable prefix of attention head groups.
 - `train_gpt_yarn.py`: YaRN-style rotary rescaling for longer-context probes.
 
+## Regularization Variant Entrypoints
+
+- `train_gpt_dropout.py`: dropout-regularized Exp 014 wrapper with env-backed residual and optional embedding dropout.
+
 ## Locked Baseline Defaults
 
 Shared defaults:
