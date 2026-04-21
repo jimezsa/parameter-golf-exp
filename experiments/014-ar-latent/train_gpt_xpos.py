@@ -15,6 +15,7 @@ baseline = load_base("exp014_ar_latent_xpos_base")
 
 
 def _apply_scaled_rotary(x, scale, rope_dims: int):
+    scale = scale.to(device=x.device, dtype=x.dtype)
     if rope_dims <= 0:
         return x
     if rope_dims < x.size(-1):
