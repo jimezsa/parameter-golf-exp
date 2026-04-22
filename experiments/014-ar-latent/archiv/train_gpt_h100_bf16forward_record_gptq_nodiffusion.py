@@ -774,39 +774,6 @@ def restore_low_dim_params_to_fp32(module: nn.Module) -> None:
         for name, param in module.named_parameters():
             if (param.ndim < 2 or any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)) and param.dtype != torch.float32:
                 param.data = param.data.float()
-
-
-def build_master_param_copies(params: list[Tensor]) -> tuple[list[nn.Parameter], list[tuple[Tensor, nn.Parameter]]]:
-    masters: list[nn.Parameter] = []
-    pairs: list[tuple[Tensor, nn.Parameter]] = []
-    for param in params:
-        master = nn.Parameter(param.detach().float().clone(), requires_grad=True)
-        masters.append(master)
-        pairs.append((param, master))
-    return masters, pairs
-
-
-def sync_master_grads(pairs: list[tuple[Tensor, nn.Parameter]]) -> None:
-    with torch.no_grad():
-        for model_param, master_param in pairs:
-            if model_param.grad is None:
-                master_param.grad = None
-                continue
-            if master_param.grad is None or master_param.grad.shape != master_param.shape:
-                master_param.grad = torch.empty_like(master_param)
-            master_param.grad.copy_(model_param.grad)
-
-
-def sync_model_params_from_masters(pairs: list[tuple[Tensor, nn.Parameter]]) -> None:
-    with torch.no_grad():
-        for model_param, master_param in pairs:
-            model_param.copy_(master_param.to(dtype=model_param.dtype))
-
-
-def sync_masters_from_model(pairs: list[tuple[Tensor, nn.Parameter]]) -> None:
-    with torch.no_grad():
-        for model_param, master_param in pairs:
-            master_param.copy_(model_param)
 class Rotary(nn.Module):
     def __init__(self, dim: int, base: float = 10000.0, train_seq_len: int = 1024, rope_dims: int = 0):
         super().__init__()
@@ -1850,10 +1817,20 @@ def main() -> None:
         swigelu=args.swigelu,
         swigelu_hidden_dim=args.swigelu_hidden_dim,
     ).to(device).bfloat16()
+    # Match the fast path from the main script: keep heavyweight banks and
+    # low-dimensional control tensors in FP32, then cast on demand in forward.
+    base_model.qo_bank.data = base_model.qo_bank.data.float()
+    base_model.kv_bank.data = base_model.kv_bank.data.float()
+    base_model.mlp_up_bank.data = base_model.mlp_up_bank.data.float()
+    base_model.mlp_down_bank.data = base_model.mlp_down_bank.data.float()
+    for module in base_model.modules():
+        if isinstance(module, CastedLinear):
+            module.float()
+    restore_low_dim_params_to_fp32(base_model)
     compiled_model = torch.compile(base_model, dynamic=False, fullgraph=True)
     model = compiled_model
 
-    matrix_model_params = [
+    matrix_params = [
         base_model.qo_bank, base_model.kv_bank,
         base_model.mlp_up_bank, base_model.mlp_down_bank,
     ]
@@ -1869,8 +1846,7 @@ def main() -> None:
         scalar_model_params.append(base_model.skip_gates)
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
     tok_params = [{"params": [base_model.tok_emb.weight], "lr": token_lr, "base_lr": token_lr}]
-    matrix_params, matrix_master_pairs = build_master_param_copies(matrix_model_params)
-    scalar_params, scalar_master_pairs = build_master_param_copies(scalar_model_params)
+    scalar_params = scalar_model_params
     optimizer_tok = torch.optim.AdamW(
         tok_params,
         betas=(args.beta1, args.beta2),
@@ -1904,7 +1880,7 @@ def main() -> None:
     head_model_params: list[Tensor] = []
     if base_model.lm_head is not None:
         head_model_params.append(base_model.lm_head.weight)
-    head_params, head_master_pairs = build_master_param_copies(head_model_params)
+    head_params = head_model_params
     if head_params:
         optimizer_head = torch.optim.Adam(
             [{"params": head_params, "lr": args.head_lr, "base_lr": args.head_lr}],
@@ -1913,7 +1889,6 @@ def main() -> None:
             fused=True,
         )
         replicated_params.extend(head_params)
-    master_param_pairs = matrix_master_pairs + scalar_master_pairs + head_master_pairs
     optimizers: list[torch.optim.Optimizer] = [optimizer_tok, optimizer_muon, optimizer_scalar]
     if optimizer_head is not None:
         optimizers.append(optimizer_head)
@@ -1952,7 +1927,7 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
-    log0("forward_params:bf16 optimizer_masters:fp32")
+    log0("forward_params:banks_fp32 cast_in_forward casted_linear_fp32 controls_fp32 optimizer_masters:none")
     comm_profiler.log_static(log0)
     if args.weight_share:
         log0(f"weight_share:enabled (2x effective depth = {args.num_layers * 2} layers from {args.num_layers} physical)")
@@ -1960,7 +1935,6 @@ def main() -> None:
         log0(f"recurrence:depth={args.recurrence_depth} layers=[{args.recurrence_start},{args.recurrence_end}] start_frac={args.recurrence_start_frac}")
     train_loader = ShuffledSequenceLoader(args, rank, world_size, device)
     def zero_grad_all() -> None:
-        base_model.zero_grad(set_to_none=True)
         for opt in optimizers:
             opt.zero_grad(set_to_none=True)
     max_wallclock_ms = 1000.0 * args.max_wallclock_seconds if args.max_wallclock_seconds > 0 else None
@@ -2003,7 +1977,6 @@ def main() -> None:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
                     warmup_loss = model(x, y)
                 (warmup_loss * grad_scale).backward()
-            sync_master_grads(master_param_pairs)
             if distributed:
                 for p in replicated_params:
                     if p.grad is not None:
@@ -2013,12 +1986,10 @@ def main() -> None:
                         dist.all_reduce(p.grad, op=dist.ReduceOp.AVG)
             for opt in optimizers:
                 opt.step()
-            sync_model_params_from_masters(master_param_pairs)
             zero_grad_all()
             if effective_warmup_steps <= 20 or (warmup_step + 1) % 10 == 0 or warmup_step + 1 == effective_warmup_steps:
                 log0(f"warmup_step:{warmup_step + 1}/{effective_warmup_steps}")
         base_model.load_state_dict(initial_model_state, strict=True)
-        sync_masters_from_model(master_param_pairs)
         for opt, state in zip(optimizers, initial_optimizer_states, strict=True):
             opt.load_state_dict(state)
         zero_grad_all()
@@ -2093,7 +2064,6 @@ def main() -> None:
                     group["betas"] = (args.beta1, cur_beta2)
         if args.grad_clip_norm > 0:
             torch.nn.utils.clip_grad_norm_(base_model.parameters(), args.grad_clip_norm)
-        sync_master_grads(master_param_pairs)
         # === 3-phase overlapped optimizer step ===
         # Phase 1: Launch async reduce-scatter for banks (biggest first)
         optimizer_muon.launch_reduce_scatters()
@@ -2115,7 +2085,6 @@ def main() -> None:
             optimizer_head.step()
         # Phase 3: Wait for RS, local NS5, all-gather (banks processed last)
         optimizer_muon.step()
-        sync_model_params_from_masters(master_param_pairs)
         comm_profiler.record_replicated(replicated_reduce_ms, replicated_reduce_calls, replicated_reduce_bytes)
         comm_profiler.record_muon(optimizer_muon.drain_comm_stats())
         zero_grad_all()
