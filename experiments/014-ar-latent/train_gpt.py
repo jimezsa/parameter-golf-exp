@@ -2298,7 +2298,8 @@ def main() -> None:
         comm_profiler.record_muon(optimizer_muon.drain_comm_stats())
         zero_grad_all()
         step += 1
-        comm_profiler.record_step(1000.0 * (time.perf_counter() - step_wall_t0))
+        step_wall_ms = 1000.0 * (time.perf_counter() - step_wall_t0)
+        comm_profiler.record_step(step_wall_ms)
         approx_training_time_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
         if args.swa_enabled and scale < 0.2 and step % args.swa_every == 0:
             if swa_state is None:
@@ -2316,7 +2317,8 @@ def main() -> None:
         if should_log_train:
             log0(
                 f"step:{step}/{args.iterations} train_loss:{train_loss.item():.4f} "
-                f"train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms / step:.2f}ms"
+                f"train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms / step:.2f}ms "
+                f"step_wall:{step_wall_ms:.2f}ms"
             )
         reached_cap = max_wallclock_ms is not None and approx_training_time_ms >= max_wallclock_ms
         if distributed and max_wallclock_ms is not None:
@@ -2350,21 +2352,11 @@ def main() -> None:
     excluded_aux = sum(int(t.numel()) for k, t in full_state_dict.items() if "latent_proj" in k)
     if excluded_aux > 0:
         log0(f"export_excluding_training_only_params:{excluded_aux}")
-    submission_code_wrapper, submission_code_stats = _build_submission_wrapper(code)
     if master_process:
         torch.save(export_sd, "final_model.pt")
         model_bytes = os.path.getsize("final_model.pt")
         log0(f"Serialized model: {model_bytes} bytes")
-        log0(f"Code size (uncompressed): {submission_code_stats['raw_bytes']} bytes")
-        log0(
-            f"Code size (minified via {submission_code_stats['backend']}): "
-            f"{submission_code_stats['minified_bytes']} bytes"
-        )
-        log0(f"Code size (wrapped): {submission_code_stats['wrapped_bytes']} bytes")
-        submission_code_path = Path(args.submission_code_path)
-        submission_code_path.parent.mkdir(parents=True, exist_ok=True)
-        submission_code_path.write_bytes(submission_code_wrapper)
-        log0(f"Wrapped submission code: {submission_code_path}")
+        log0(f"Code size (uncompressed): {len(code.encode('utf-8'))} bytes")
     if args.skip_quant:
         log0("skip_quant:enabled — skipping post-training quantization pipeline")
         if distributed:
@@ -2427,9 +2419,19 @@ def main() -> None:
     quant_raw = quant_buf.getvalue()
     quant_blob = _compress_quant_payload(quant_raw, args.compressor)
     if master_process:
+        submission_code_wrapper, submission_code_stats = _build_submission_wrapper(code)
+        submission_code_path = Path(args.submission_code_path)
+        submission_code_path.parent.mkdir(parents=True, exist_ok=True)
+        submission_code_path.write_bytes(submission_code_wrapper)
         with open("final_model.int6.ptz", "wb") as f:
             f.write(quant_blob)
         quant_file_bytes = len(quant_blob)
+        log0(
+            f"Code size (minified via {submission_code_stats['backend']}): "
+            f"{submission_code_stats['minified_bytes']} bytes"
+        )
+        log0(f"Code size (wrapped): {submission_code_stats['wrapped_bytes']} bytes")
+        log0(f"Wrapped submission code: {submission_code_path}")
         log0(f"Serialized model mixed-quant+{args.compressor}: {quant_file_bytes} bytes")
         log0(
             "Total submission size mixed-quant+"
