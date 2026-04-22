@@ -151,6 +151,7 @@ Runs v14–v40 are manual config sweeps run by jimezsa on the pod. Baseline conf
 | v38 | 1.2042 | — | 786 | — | — | Dropout=0.10, SWA=off. Pre-quant only. 764 steps. Hurts pre-quant. |
 | v39 | 1.2025 | 1.2079 (rt only) | 790 | 16,098,169 | — | Dropout=0.05, SWA=off. Pre-quant only + partial quant. 745 steps. |
 | v40 | 1.3142 | — | 2181 | — | — | No diffusion + recurrence. Only 276 steps at 2181ms. Massive regression. |
+| v41 | 1.1997 | 1.2119 (sw) / 1.2282 (rt) | 941 | 16,142,512 | — | KV8 + rope32 + SwiGeLU + embed_bits=6. **Fits 16MB.** 626 steps. SWA=off. |
 
 ### Reference Runs (exp 013)
 
