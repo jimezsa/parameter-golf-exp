@@ -2099,7 +2099,6 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
-    log0("forward_params:banks_fp32 cast_in_forward casted_linear_fp32 controls_fp32 optimizer_masters:none")
     comm_profiler.log_static(log0)
     if args.weight_share:
         log0(f"weight_share:enabled (2x effective depth = {args.num_layers * 2} layers from {args.num_layers} physical)")
@@ -2317,8 +2316,7 @@ def main() -> None:
         if should_log_train:
             log0(
                 f"step:{step}/{args.iterations} train_loss:{train_loss.item():.4f} "
-                f"train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms / step:.2f}ms "
-                f"step_wall:{step_wall_ms:.2f}ms"
+                f"train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms / step:.2f}ms"
             )
         reached_cap = max_wallclock_ms is not None and approx_training_time_ms >= max_wallclock_ms
         if distributed and max_wallclock_ms is not None:
