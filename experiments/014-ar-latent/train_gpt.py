@@ -1,4 +1,6 @@
 from __future__ import annotations
+import ast
+import base64
 import copy
 import glob
 import io
@@ -113,6 +115,7 @@ class Hyperparameters:
     diffusion_scalar_wd = float(os.environ.get("DIFFUSION_SCALAR_WD", os.environ.get("ADAM_WD", "0.02")))
     diffusion_head_wd = float(os.environ.get("DIFFUSION_HEAD_WD", "0.00"))
     compressor = os.environ.get("COMPRESSOR", "brotli")
+    submission_code_path = os.environ.get("SUBMISSION_CODE_PATH", f"logs/{run_id}.train_gpt_submission.py")
     parallel_start_layer = int(os.environ.get("PARALLEL_START_LAYER", 7))  # layers >= this use parallel residuals
     recurrence_depth = int(os.environ.get("RECURRENCE_DEPTH", 1))  # 1 = no recurrence, 2 = one extra pass through zone
     recurrence_start = int(os.environ.get("RECURRENCE_START", 3))  # first layer in recurrence zone
@@ -1766,6 +1769,74 @@ def _decompress_quant_payload(data: bytes, compressor: str) -> bytes:
         raise ValueError(f"Unknown compressor: {compressor!r}")
     return _byte_unshuffle(raw)
 
+
+class _StripDocstrings(ast.NodeTransformer):
+    def _strip_body(self, body: list[ast.stmt]) -> list[ast.stmt]:
+        if body and isinstance(body[0], ast.Expr):
+            value = body[0].value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                return body[1:]
+        return body
+
+    def visit_Module(self, node: ast.Module) -> ast.Module:
+        node.body = [self.visit(child) for child in self._strip_body(node.body)]
+        return node
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
+        self.generic_visit(node)
+        node.body = [self.visit(child) for child in self._strip_body(node.body)]
+        return node
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> ast.ClassDef:
+        self.generic_visit(node)
+        node.body = [self.visit(child) for child in self._strip_body(node.body)]
+        return node
+
+
+def _minify_submission_code(code: str) -> tuple[bytes, str]:
+    try:
+        minified = subprocess.run(
+            [
+                "pyminify",
+                "--no-rename-locals",
+                "--no-hoist-literals",
+                "--remove-literal-statements",
+                "-",
+            ],
+            input=code.encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        ).stdout
+        return minified, "pyminify"
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        tree = ast.parse(code)
+        tree = _StripDocstrings().visit(tree)
+        ast.fix_missing_locations(tree)
+        return (ast.unparse(tree) + "\n").encode("utf-8"), "ast"
+
+
+def _build_submission_wrapper(code: str) -> tuple[bytes, dict[str, int | str]]:
+    raw_bytes = code.encode("utf-8")
+    minified_bytes, backend = _minify_submission_code(code)
+    compressed = lzma.compress(minified_bytes)
+    encoded = base64.b85encode(compressed)
+    wrapper = (
+        b'import lzma as L,base64 as B\n'
+        b'exec(L.decompress(B.b85decode("'
+        + encoded
+        + b'")))\n'
+    )
+    stats: dict[str, int | str] = {
+        "backend": backend,
+        "raw_bytes": len(raw_bytes),
+        "minified_bytes": len(minified_bytes),
+        "wrapped_bytes": len(wrapper),
+    }
+    return wrapper, stats
+
 # --- Training ---
 
 def main() -> None:
@@ -2279,12 +2350,21 @@ def main() -> None:
     excluded_aux = sum(int(t.numel()) for k, t in full_state_dict.items() if "latent_proj" in k)
     if excluded_aux > 0:
         log0(f"export_excluding_training_only_params:{excluded_aux}")
+    submission_code_wrapper, submission_code_stats = _build_submission_wrapper(code)
     if master_process:
         torch.save(export_sd, "final_model.pt")
         model_bytes = os.path.getsize("final_model.pt")
-        code_bytes = len(code.encode("utf-8"))
         log0(f"Serialized model: {model_bytes} bytes")
-        log0(f"Code size: {code_bytes} bytes")
+        log0(f"Code size (uncompressed): {submission_code_stats['raw_bytes']} bytes")
+        log0(
+            f"Code size (minified via {submission_code_stats['backend']}): "
+            f"{submission_code_stats['minified_bytes']} bytes"
+        )
+        log0(f"Code size (wrapped): {submission_code_stats['wrapped_bytes']} bytes")
+        submission_code_path = Path(args.submission_code_path)
+        submission_code_path.parent.mkdir(parents=True, exist_ok=True)
+        submission_code_path.write_bytes(submission_code_wrapper)
+        log0(f"Wrapped submission code: {submission_code_path}")
     if args.skip_quant:
         log0("skip_quant:enabled — skipping post-training quantization pipeline")
         if distributed:
@@ -2350,9 +2430,11 @@ def main() -> None:
         with open("final_model.int6.ptz", "wb") as f:
             f.write(quant_blob)
         quant_file_bytes = len(quant_blob)
-        code_bytes = len(code.encode("utf-8"))
         log0(f"Serialized model mixed-quant+{args.compressor}: {quant_file_bytes} bytes")
-        log0(f"Total submission size mixed-quant+{args.compressor}: {quant_file_bytes + code_bytes} bytes")
+        log0(
+            "Total submission size mixed-quant+"
+            f"{args.compressor}: {quant_file_bytes + int(submission_code_stats['wrapped_bytes'])} bytes"
+        )
     if distributed:
         dist.barrier()
     with open("final_model.int6.ptz", "rb") as f:
