@@ -116,7 +116,6 @@ class Hyperparameters:
     diffusion_head_wd = float(os.environ.get("DIFFUSION_HEAD_WD", "0.00"))
     compressor = os.environ.get("COMPRESSOR", "brotli")
     submission_code_path = os.environ.get("SUBMISSION_CODE_PATH", f"logs/{run_id}.train_gpt_submission.py")
-    submission_size_target_bytes = int(os.environ.get("SUBMISSION_SIZE_TARGET_BYTES", "16000000"))
     parallel_start_layer = int(os.environ.get("PARALLEL_START_LAYER", 7))  # layers >= this use parallel residuals
     recurrence_depth = int(os.environ.get("RECURRENCE_DEPTH", 1))  # 1 = no recurrence, 2 = one extra pass through zone
     recurrence_start = int(os.environ.get("RECURRENCE_START", 3))  # first layer in recurrence zone
@@ -1771,118 +1770,6 @@ def _decompress_quant_payload(data: bytes, compressor: str) -> bytes:
     return _byte_unshuffle(raw)
 
 
-def _fit_quantized_artifact_to_budget(
-    quant_result: dict[str, Tensor],
-    quant_meta: dict[str, object],
-    compressor: str,
-    code_bytes: int,
-    target_bytes: int,
-    log_fn,
-) -> tuple[dict[str, Tensor], int]:
-    if target_bytes <= 0:
-        raise ValueError(f"Submission size target must be positive, got {target_bytes}")
-
-    prune_keys: list[str] = []
-    prune_idx: list[Tensor] = []
-    all_errors: list[Tensor] = []
-    for name, info in quant_meta.items():
-        if not (isinstance(info, str) and info.startswith("gptq (int")):
-            continue
-        qk, sk = name + ".q", name + ".scale"
-        if qk not in quant_result or sk not in quant_result:
-            continue
-        q = quant_result[qk]
-        s = quant_result[sk]
-        if s.ndim == 0:
-            continue
-        ones_mask = q.abs() == 1
-        if not ones_mask.any():
-            continue
-        row_idx = torch.arange(q.shape[0]).unsqueeze(1).expand_as(q)[ones_mask]
-        flat_idx = torch.arange(q.numel()).reshape(q.shape)[ones_mask]
-        errors = s.float()[row_idx].pow(2)
-        order = errors.argsort()
-        prune_keys.append(qk)
-        prune_idx.append(flat_idx[order])
-        all_errors.append(errors[order])
-
-    def _measure(tmp: dict[str, Tensor]) -> int:
-        buf = io.BytesIO()
-        torch.save({"w": tmp, "m": quant_meta}, buf)
-        quant_bytes = len(_compress_quant_payload(buf.getvalue(), compressor))
-        return quant_bytes + code_bytes
-
-    artifact_bytes = _measure(quant_result)
-    log_fn(
-        f"submission_size_fit: target_bytes={target_bytes} code_bytes={code_bytes} "
-        f"quant_bytes={artifact_bytes - code_bytes} total_bytes={artifact_bytes}"
-    )
-    total_candidates = sum(len(errors) for errors in all_errors)
-    if artifact_bytes <= target_bytes or total_candidates == 0:
-        if artifact_bytes <= target_bytes:
-            log_fn("selective_prune: already fits, no pruning needed")
-        else:
-            log_fn("selective_prune: no +/-1 candidates available for size trimming")
-        return quant_result, artifact_bytes
-
-    global_errors = torch.cat(all_errors)
-    global_order = global_errors.argsort()
-    offsets: list[int] = []
-    off = 0
-    for errors in all_errors:
-        offsets.append(off)
-        off += len(errors)
-    group_ids = torch.zeros(total_candidates, dtype=torch.long)
-    for gi, errors in enumerate(all_errors):
-        group_ids[offsets[gi]:offsets[gi] + len(errors)] = gi
-    sorted_group_ids = group_ids[global_order]
-    sorted_local_pos = torch.zeros(total_candidates, dtype=torch.long)
-    for gi in range(len(prune_keys)):
-        mask = sorted_group_ids == gi
-        sorted_local_pos[mask] = torch.arange(int(mask.sum()), dtype=torch.long)
-
-    def _apply_prune(n: int) -> dict[str, Tensor]:
-        tmp = {k: v.clone() for k, v in quant_result.items()}
-        if n <= 0:
-            return tmp
-        n = min(n, total_candidates)
-        sel_groups = sorted_group_ids[:n]
-        sel_local = sorted_local_pos[:n]
-        for gi in range(len(prune_keys)):
-            mask = sel_groups == gi
-            if not mask.any():
-                continue
-            local_positions = sel_local[mask]
-            flat_indices = prune_idx[gi][local_positions]
-            tmp[prune_keys[gi]].view(-1)[flat_indices] = 0
-        return tmp
-
-    full_pruned = _apply_prune(total_candidates)
-    full_bytes = _measure(full_pruned)
-    log_fn(
-        f"selective_prune: {total_candidates} +/-1 candidates, "
-        f"full_prune_total_bytes={full_bytes}"
-    )
-    if full_bytes > target_bytes:
-        log_fn("selective_prune: even full prune cannot reach target; applying all candidates")
-        return full_pruned, full_bytes
-
-    lo, hi = 0, total_candidates
-    while lo < hi:
-        mid = (lo + hi) // 2
-        mid_bytes = _measure(_apply_prune(mid))
-        if mid_bytes <= target_bytes:
-            hi = mid
-        else:
-            lo = mid + 1
-    log_fn(
-        f"selective_prune: pruning {lo}/{total_candidates} +/-1 values "
-        f"({100.0 * lo / total_candidates:.1f}%) to fit {target_bytes} bytes"
-    )
-    pruned = _apply_prune(lo)
-    return pruned, _measure(pruned)
-
-
 class _StripDocstrings(ast.NodeTransformer):
     def _strip_body(self, body: list[ast.stmt]) -> list[ast.stmt]:
         if body and isinstance(body[0], ast.Expr):
@@ -2525,27 +2412,12 @@ def main() -> None:
     quant_result, quant_meta = mixed_quantize_int6(unbanked_sd, args, hessians=hessians)
     _t_quant_elapsed = time.perf_counter() - _t_quant_start
     log0(f"gptq:quantized {len(quant_meta)} layers in {_t_quant_elapsed:.1f}s")
-    submission_code_wrapper, submission_code_stats = _build_submission_wrapper(code)
-    submission_code_bytes = int(submission_code_stats["wrapped_bytes"])
-    quant_result, fitted_submission_bytes = _fit_quantized_artifact_to_budget(
-        quant_result,
-        quant_meta,
-        args.compressor,
-        submission_code_bytes,
-        max(1, args.submission_size_target_bytes - 1),
-        log0,
-    )
     quant_buf = io.BytesIO()
     torch.save({"w": quant_result, "m": quant_meta}, quant_buf)
     quant_raw = quant_buf.getvalue()
     quant_blob = _compress_quant_payload(quant_raw, args.compressor)
-    total_submission_bytes = len(quant_blob) + submission_code_bytes
-    if total_submission_bytes >= args.submission_size_target_bytes:
-        raise RuntimeError(
-            f"Total submission size {total_submission_bytes} bytes exceeds "
-            f"the {args.submission_size_target_bytes}-byte budget"
-        )
     if master_process:
+        submission_code_wrapper, submission_code_stats = _build_submission_wrapper(code)
         submission_code_path = Path(args.submission_code_path)
         submission_code_path.parent.mkdir(parents=True, exist_ok=True)
         submission_code_path.write_bytes(submission_code_wrapper)
@@ -2561,8 +2433,7 @@ def main() -> None:
         log0(f"Serialized model mixed-quant+{args.compressor}: {quant_file_bytes} bytes")
         log0(
             "Total submission size mixed-quant+"
-            f"{args.compressor}: {total_submission_bytes} bytes "
-            f"(target < {args.submission_size_target_bytes}, fitted {fitted_submission_bytes} bytes)"
+            f"{args.compressor}: {quant_file_bytes + int(submission_code_stats['wrapped_bytes'])} bytes"
         )
     if distributed:
         dist.barrier()
