@@ -586,6 +586,15 @@ class GPT(nn.Module):
         pred_latents = self.latent_proj(hidden_diff)
         return F.mse_loss(pred_latents.float(), target_latents.float(), reduction='mean')
 
+    def _ddp_keepalive_loss(self):
+        # DDP requires these training-only params to participate in every backward,
+        # even on steps where the stochastic diffusion aux path is skipped.
+        keepalive = self.mask_embed.reshape(-1)[:1].float().sum()
+        keepalive = keepalive + self.time_proj.weight.reshape(-1)[:1].float().sum()
+        if self.latent_proj is not None:
+            keepalive = keepalive + self.latent_proj.weight.reshape(-1)[:1].float().sum()
+        return keepalive * 0.0
+
     def forward_logits(self, input_ids):
         return self._project_logits(self._forward_hidden(input_ids))
 
@@ -594,6 +603,8 @@ class GPT(nn.Module):
         loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)).float(), target_ids.reshape(-1), reduction='mean')
         if self.training and run_aux_diffusion and self.diffusion_loss_weight > 0.0:
             loss = loss + self.diffusion_loss_weight * self._diffusion_loss(input_ids, self.diffusion_subsample_frac)
+        if self.training:
+            loss = loss + self._ddp_keepalive_loss()
         return loss
 
 
