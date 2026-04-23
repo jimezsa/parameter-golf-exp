@@ -170,6 +170,9 @@ Runs v14–v40 are manual config sweeps run by jimezsa on the pod. Baseline conf
 | v42     | 1.3267  | 1.3172 (sw) / 1.3325 (rt) | 2412           | **17,093,525** | —      | KV8 + rope32 + SwiGeLU + embed_bits=8 + full GPTQ. **Undertrained** (244 steps). **Over 16MB.** SWA=off. |
 | v43     | 2.4710  | 2.4773 (rt) / 2.4859 (sw) | ~2329          | **16,071,105** | —      | `train_gpt_encode_diffusion.py` full GPTQ. Layer looping (num_loops=2). **EMA broken** (pre-EMA 1.3886 → post-EMA 2.4710). 253 steps. Over 16MB. |
 | v44     | 2.4101  | 2.4156 (rt) / 2.4206 (sw) | ~2329          | 16,017,925     | —      | `train_gpt_encode_reference.py` full GPTQ. Layer looping + parallel residuals + QK-gain 5.0. **EMA broken** (pre-EMA 1.3710 → post-EMA 2.4101). 253 steps. |
+| v45     | 1.8383  | 1.8447 (rt)               | ~1644          | 16,063,525     | —      | `train_gpt_encode_diffusion.py` NUM_LOOPS=0. **EMA broken** (pre-EMA 1.3087 → post-EMA 1.8383). 358 steps. Old code (no EMA reset fix). Killed during sw eval. |
+| v46     | 1.2627  | —                         | ~1015          | —              | b0f1671 | `train_gpt_encode_diffusion.py` DLW=0.5, NUM_LOOPS=2, SKIP_QUANT. EMA fix applied. 591 steps, 803K tok/s. Val BPB 1.2130 (pre-EMA). |
+| v48     | 1.2580  | —                         | ~983           | —              | b0f1671 | `train_gpt_encode_diffusion.py` DLW=0.3, NUM_LOOPS=2, SKIP_QUANT. 610 steps, 833K tok/s. Val BPB 1.2099 (pre-EMA). Best encode_diffusion so far. |
 
 ### Reference Runs (exp 013)
 
