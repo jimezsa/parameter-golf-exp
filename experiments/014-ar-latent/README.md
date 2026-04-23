@@ -98,6 +98,17 @@ torchrun --standalone --nproc_per_node=1 \
 experiments/014-ar-latent/train_gpt.py
 ```
 
+Manual submission-code packing:
+
+```bash
+python3 experiments/014-ar-latent/pack_submission.py \
+experiments/014-ar-latent/train_gpt.py \
+logs/exp014.train_gpt_submission.py \
+--minify
+```
+
+Use this when you need to pack the current `train_gpt.py` entrypoint without rerunning training. Full GPTQ runs already write a wrapped code artifact to `SUBMISSION_CODE_PATH` (`logs/{RUN_ID}.train_gpt_submission.py` by default); `--minify` is optional and falls back to basic minification if `python-minifier` is unavailable.
+
 Triton loss variant dependency:
 
 ```bash
