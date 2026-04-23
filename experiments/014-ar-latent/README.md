@@ -169,6 +169,7 @@ Runs v14–v40 are manual config sweeps run by jimezsa on the pod. Baseline conf
 | v41     | 1.1997  | 1.2119 (sw) / 1.2282 (rt) | 941            | 16,142,512     | —      | KV8 + rope32 + SwiGeLU + embed_bits=6. **Fits 16MB.** 626 steps. SWA=off.                                |
 | v42     | 1.3267  | 1.3172 (sw) / 1.3325 (rt) | 2412           | **17,093,525** | —      | KV8 + rope32 + SwiGeLU + embed_bits=8 + full GPTQ. **Undertrained** (244 steps). **Over 16MB.** SWA=off. |
 | v43     | 2.4710  | 2.4773 (rt) / 2.4859 (sw) | ~2329          | **16,071,105** | —      | `train_gpt_encode_diffusion.py` full GPTQ. Layer looping (num_loops=2). **EMA broken** (pre-EMA 1.3886 → post-EMA 2.4710). 253 steps. Over 16MB. |
+| v44     | 2.4101  | 2.4156 (rt) / 2.4206 (sw) | ~2329          | 16,017,925     | —      | `train_gpt_encode_reference.py` full GPTQ. Layer looping + parallel residuals + QK-gain 5.0. **EMA broken** (pre-EMA 1.3710 → post-EMA 2.4101). 253 steps. |
 
 ### Reference Runs (exp 013)
 
