@@ -26,6 +26,10 @@ Exp 013 remains the historical scratchpad for throughput probes and HP sweeps. E
 
 - `train_gpt_dropout.py`: dropout-regularized Exp 014 wrapper with env-backed residual and optional embedding dropout.
 
+## Decoded Variant Entrypoints
+
+- `train_gpt_decode_diffusion.py`: readable decode-script variant with the Exp 014 latent-MSE diffusion aux path added back in; diffusion is capped to one micro-step per optimizer step so grad accumulation does not multiply wallclock cost.
+
 ## Locked Baseline Defaults
 
 Shared defaults:
