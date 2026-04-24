@@ -464,6 +464,7 @@ class GPT(nn.Module):
         self.diffusion_loss_weight = h.diffusion_loss_weight
         self.diffusion_aux_prob = h.diffusion_aux_prob
         self.diffusion_subsample_frac = h.diffusion_subsample_frac
+        self.diffusion_prefix_crop_len = h.diffusion_prefix_crop_len
         self.tok_emb = nn.Embedding(h.vocab_size, h.embedding_dim)
         self.mask_embed = nn.Parameter(torch.randn(h.model_dim) * h.tied_embed_init_std)
         self.time_proj = CastedLinear(1, h.model_dim, bias=False)
