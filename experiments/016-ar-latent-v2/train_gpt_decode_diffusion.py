@@ -89,6 +89,7 @@ class Hyperparameters:
     diffusion_start_frac = float(os.environ.get('DIFFUSION_START_FRAC', 0.25))
     diffusion_stop_frac = float(os.environ.get('DIFFUSION_STOP_FRAC', 0.60))
     diffusion_subsample_frac = float(os.environ.get('DIFFUSION_SUBSAMPLE_FRAC', 1.00))
+    diffusion_prefix_crop_len = int(os.environ.get('DIFFUSION_PREFIX_CROP_LEN', 0))
     diffusion_scalar_wd = float(os.environ.get('DIFFUSION_SCALAR_WD', os.environ.get('ADAM_WD', '0.02')))
     diffusion_head_wd = float(os.environ.get('DIFFUSION_HEAD_WD', '0.00'))
     ema_decay = float(os.environ.get('EMA_DECAY', 0.9965))
@@ -566,10 +567,15 @@ class GPT(nn.Module):
             logits_proj = self.lm_head(x)
         return self.logit_softcap * torch.tanh(logits_proj / self.logit_softcap)
 
-    def _diffusion_loss(self, input_ids, subsample_frac=1.00):
+    def _diffusion_loss(self, input_ids, subsample_frac=1.00, orig_latents=None):
         if self.latent_proj is None:
             raise RuntimeError('latent_proj is required when diffusion loss is enabled')
-        orig_latents = self._embed_inputs(input_ids)
+        if orig_latents is None:
+            orig_latents = self._embed_inputs(input_ids)
+        crop_len = self.diffusion_prefix_crop_len
+        if 0 < crop_len < input_ids.size(1):
+            input_ids = input_ids[:, :crop_len]
+            orig_latents = orig_latents[:, :crop_len, :]
         bsz = input_ids.size(0)
         t = torch.rand(bsz, 1, 1, device=input_ids.device, dtype=torch.float32)
         t_mix = cast_if_needed(t, orig_latents.dtype)
@@ -600,10 +606,12 @@ class GPT(nn.Module):
         return self._project_logits(self._forward_hidden(input_ids))
 
     def forward(self, input_ids, target_ids, run_aux_diffusion=False):
-        logits = self.forward_logits(input_ids)
+        input_embeds = self._embed_inputs(input_ids)
+        logits = self._project_logits(self._forward_hidden(input_ids, x_override=input_embeds))
         loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)).float(), target_ids.reshape(-1), reduction='mean')
         if self.training and run_aux_diffusion and self.diffusion_loss_weight > 0.0:
-            loss = loss + self.diffusion_loss_weight * self._diffusion_loss(input_ids, self.diffusion_subsample_frac)
+            loss = loss + self.diffusion_loss_weight * self._diffusion_loss(
+                input_ids, self.diffusion_subsample_frac, orig_latents=input_embeds)
         if self.training:
             loss = loss + self._ddp_keepalive_loss()
         return loss
@@ -1258,7 +1266,8 @@ def train_model(h, device, val_data):
     log(
         f'diffusion_aux:prob:{h.diffusion_aux_prob:.2f} weight:{h.diffusion_loss_weight:.4f} '
         f'start_frac:{h.diffusion_start_frac:.2f} stop_frac:{h.diffusion_stop_frac:.2f} '
-        f'subsample:{h.diffusion_subsample_frac:.2f} max_micro_steps_per_step:1 params:{diffusion_params}'
+        f'subsample:{h.diffusion_subsample_frac:.2f} crop_len:{h.diffusion_prefix_crop_len or h.train_seq_len} '
+        f'max_micro_steps_per_step:1 params:{diffusion_params}'
     )
     optimizers = Optimizers(h, base_model)
     train_loader = ShuffledSequenceLoader(h, device)
