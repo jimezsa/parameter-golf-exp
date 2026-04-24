@@ -34,7 +34,7 @@ RUN_ID=exp016_1x_baseline \
 SEED=1337 \
 SKIP_QUANT=1 \
 torchrun --standalone --nproc_per_node=1 \
-experiments/016-ar-latent-v2train_gpt.py
+experiments/016-ar-latent-v2/train_gpt.py
 ```
 
 8xH100 baseline screen:
