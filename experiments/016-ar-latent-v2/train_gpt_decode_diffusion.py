@@ -88,7 +88,6 @@ class Hyperparameters:
     diffusion_aux_prob = float(os.environ.get('DIFFUSION_AUX_PROB', 0.03))
     diffusion_start_frac = float(os.environ.get('DIFFUSION_START_FRAC', 0.25))
     diffusion_stop_frac = float(os.environ.get('DIFFUSION_STOP_FRAC', 0.60))
-    diffusion_seq_len = int(os.environ.get('DIFFUSION_SEQ_LEN', 512))
     diffusion_subsample_frac = float(os.environ.get('DIFFUSION_SUBSAMPLE_FRAC', 1.00))
     diffusion_scalar_wd = float(os.environ.get('DIFFUSION_SCALAR_WD', os.environ.get('ADAM_WD', '0.02')))
     diffusion_head_wd = float(os.environ.get('DIFFUSION_HEAD_WD', '0.00'))
@@ -458,14 +457,11 @@ class GPT(nn.Module):
             raise ValueError(f'diffusion_aux_prob must be in [0, 1], got {h.diffusion_aux_prob}')
         if h.diffusion_loss_weight < 0.0:
             raise ValueError(f'diffusion_loss_weight must be non-negative, got {h.diffusion_loss_weight}')
-        if h.diffusion_seq_len < 0:
-            raise ValueError(f'diffusion_seq_len must be non-negative, got {h.diffusion_seq_len}')
         self.tie_embeddings = h.tie_embeddings
         self.tied_embed_init_std = h.tied_embed_init_std
         self.logit_softcap = h.logit_softcap
         self.diffusion_loss_weight = h.diffusion_loss_weight
         self.diffusion_aux_prob = h.diffusion_aux_prob
-        self.diffusion_seq_len = h.diffusion_seq_len
         self.diffusion_subsample_frac = h.diffusion_subsample_frac
         self.tok_emb = nn.Embedding(h.vocab_size, h.embedding_dim)
         self.mask_embed = nn.Parameter(torch.randn(h.model_dim) * h.tied_embed_init_std)
@@ -573,11 +569,6 @@ class GPT(nn.Module):
     def _diffusion_loss(self, input_ids, subsample_frac=1.00):
         if self.latent_proj is None:
             raise RuntimeError('latent_proj is required when diffusion loss is enabled')
-        seq_len = input_ids.size(1)
-        if 0 < self.diffusion_seq_len < seq_len:
-            start = torch.randint(seq_len - self.diffusion_seq_len + 1, (), device=input_ids.device)
-            idx = start + torch.arange(self.diffusion_seq_len, device=input_ids.device)
-            input_ids = input_ids.index_select(1, idx)
         orig_latents = self._embed_inputs(input_ids)
         bsz = input_ids.size(0)
         t = torch.rand(bsz, 1, 1, device=input_ids.device, dtype=torch.float32)
@@ -1267,8 +1258,7 @@ def train_model(h, device, val_data):
     log(
         f'diffusion_aux:prob:{h.diffusion_aux_prob:.2f} weight:{h.diffusion_loss_weight:.4f} '
         f'start_frac:{h.diffusion_start_frac:.2f} stop_frac:{h.diffusion_stop_frac:.2f} '
-        f'seq_len:{h.diffusion_seq_len} subsample:{h.diffusion_subsample_frac:.2f} '
-        f'max_micro_steps_per_step:1 params:{diffusion_params}'
+        f'subsample:{h.diffusion_subsample_frac:.2f} max_micro_steps_per_step:1 params:{diffusion_params}'
     )
     optimizers = Optimizers(h, base_model)
     train_loader = ShuffledSequenceLoader(h, device)
@@ -1359,7 +1349,7 @@ def train_model(h, device, val_data):
         if should_validate:
             torch.cuda.synchronize()
             training_time_ms += 1000.0 * (time.perf_counter() - t0)
-            val_loss, val_bpb = eval_val(h, device, val_data, base_model)
+            val_loss, val_bpb = eval_val(h, device, val_data, model, base_model)
             log(f'{step}/{h.iterations} val_loss: {val_loss:.4f} val_bpb: {val_bpb:.4f}')
             torch.cuda.synchronize()
             t0 = time.perf_counter()
@@ -1431,7 +1421,7 @@ def train_and_eval(h, device):
     log(f'val_tokens: {val_data.val_tokens.numel() - 1}')
     base_model, compiled_model = train_model(h, device, val_data)
     torch._dynamo.reset()
-    timed_eval('pre-quantization post-ema', eval_val, h, device, val_data, base_model)
+    timed_eval('pre-quantization post-ema', eval_val, h, device, val_data, compiled_model, base_model)
     if h.skip_quant:
         log('skip_quant:enabled — skipping post-training quantization pipeline')
         return
@@ -1441,7 +1431,8 @@ def train_and_eval(h, device):
     eval_model = deserialize(h, device)
     if h.num_loops > 0:
         eval_model.looping_active = True
-    timed_eval('quantized', eval_val, h, device, val_data, eval_model)
+    compiled_model = torch.compile(eval_model, dynamic=False, fullgraph=True)
+    timed_eval('quantized', eval_val, h, device, val_data, compiled_model, eval_model)
     if h.sliding_window_enabled:
         timed_eval('quantized_sliding_window', eval_val_sliding, h, device, val_data, eval_model)
     if h.ttt_enabled and h.sliding_window_enabled:

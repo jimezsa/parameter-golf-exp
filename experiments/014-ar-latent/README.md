@@ -28,8 +28,7 @@ Exp 013 remains the historical scratchpad for throughput probes and HP sweeps. E
 
 ## Decoded Variant Entrypoints
 
-- `train_gpt_decode_diffusion.py`: readable decode-script variant with the Exp 014 latent-MSE diffusion aux path added back in; diffusion is capped to one micro-step per optimizer step and uses `DIFFUSION_SEQ_LEN=512` by default so grad accumulation and the auxiliary pass do not multiply wallclock cost.
-- `train_gpt_encode_diffusion.py`: encoded diffusion variant with the same `DIFFUSION_SEQ_LEN=512` default for faster auxiliary diffusion passes.
+- `train_gpt_decode_diffusion.py`: readable decode-script variant with the Exp 014 latent-MSE diffusion aux path added back in; diffusion is capped to one micro-step per optimizer step so grad accumulation does not multiply wallclock cost.
 
 ## Locked Baseline Defaults
 

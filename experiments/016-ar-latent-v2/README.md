@@ -8,8 +8,6 @@ Clean continuation of the AR-latent lane (exp 014 codebase). Fresh iteration tab
 
 Forked from exp 014 `train_gpt.py` as-is. No code changes in v1.
 
-`train_gpt_decode_diffusion.py` now defaults to `DIFFUSION_SEQ_LEN=512`, cropping only the stochastic latent-MSE auxiliary diffusion pass before its transformer forward. Standard validation is run through the eager base model to avoid the compiled-validation recompile failure observed in v2/v3.
-
 Manual submission-code packing:
 
 ```bash
@@ -68,10 +66,10 @@ experiments/016-ar-latent-v2/train_gpt.py
 
 | Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Log | Description |
 | ------- | ------- | -------------- | -------------- | ------------- | ------ | --- | ----------- |
+| v2 | FAIL | — | — | — | 5070904 | — | `train_gpt_encode_diffusion.py` x8 run crashed during pre-quant validation in compiled `forward` after the diffusion crop wiring change; stack reached `eval_val -> _eval_loss_static_or_eager -> forward`. |
+| v3 | FAIL | — | — | — | 4f35c16 | — | `train_gpt_encode_diffusion.py` x8 run still crashed during pre-quant validation; `train_model` was still routing `eval_val` through the DDP/compiled model and hit `FailOnRecompileLimitHit`. |
 
 ## Iteration Results x8 H100
 
 | Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Log | Description |
 | ------- | ------- | -------------- | -------------- | ------------- | ------ | --- | ----------- |
-| v2 | FAIL | — | — | — | 5070904 | — | `train_gpt_encode_diffusion.py` x8 run crashed during pre-quant validation in compiled `forward` after the diffusion crop wiring change; stack reached `eval_val -> _eval_loss_static_or_eager -> forward`. |
-| v3 | FAIL | — | — | — | 4f35c16 | — | `train_gpt_encode_diffusion.py` x8 run still crashed during pre-quant validation; `train_model` was still routing `eval_val` through the DDP/compiled model and hit `FailOnRecompileLimitHit`. |
