@@ -11,9 +11,9 @@ Forked from exp 014 `train_gpt.py` as-is. No code changes in v1.
 Manual submission-code packing:
 
 ```bash
-python3 experiments/014-ar-latent/pack_submission.py \
-experiments/014-ar-latent/train_gpt.py \
-experiments/014-ar-latent/train_gpt_packed.py \
+python3 experiments/016-ar-latent-v2/pack_submission.py \
+experiments/016-ar-latent-v2/train_gpt.py \
+experiments/016-ar-latent-v2/train_gpt_packed.py \
 --minify
 ```
 
@@ -30,30 +30,30 @@ python3 data/cached_challenge_fineweb.py --variant sp8192
 1xH100 baseline screen:
 
 ```bash
-RUN_ID=exp014_1x_baseline \
+RUN_ID=exp016_1x_baseline \
 SEED=1337 \
 SKIP_QUANT=1 \
 torchrun --standalone --nproc_per_node=1 \
-experiments/014-ar-latent/train_gpt.py
+experiments/016-ar-latent-v2train_gpt.py
 ```
 
 8xH100 baseline screen:
 
 ```bash
-RUN_ID=exp014_8x_baseline \
+RUN_ID=exp016_8x_baseline \
 SEED=1337 \
 SKIP_QUANT=1 \
 torchrun --standalone --nproc_per_node=8 \
-experiments/014-ar-latent/train_gpt.py
+experiments/016-ar-latent-v2/train_gpt.py
 ```
 
 Full GPTQ baseline:
 
 ```bash
-RUN_ID=exp014_gptq_full \
+RUN_ID=exp016_gptq_full \
 SEED=1337 \
 torchrun --standalone --nproc_per_node=1 \
-experiments/014-ar-latent/train_gpt.py
+experiments/016-ar-latent-v2/train_gpt.py
 ```
 
 ## Run Config

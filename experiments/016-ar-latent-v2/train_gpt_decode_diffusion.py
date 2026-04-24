@@ -101,6 +101,7 @@ class Hyperparameters:
     etlb_lr = float(os.environ.get('ETLB_LR', 0.05))
     etlb_steps = int(os.environ.get('ETLB_STEPS', 5))
     etlb_clip = float(os.environ.get('ETLB_CLIP', 3.0))
+    skip_quant = bool(int(os.environ.get('SKIP_QUANT', '0')))
     compressor = os.environ.get('COMPRESSOR', 'brotli')
     gptq_calibration_batches = int(os.environ.get('GPTQ_CALIBRATION_BATCHES', 64))
     gptq_reserve_seconds = float(os.environ.get('GPTQ_RESERVE_SECONDS', 12.0))
@@ -1245,9 +1246,12 @@ def train_model(h, device, val_data):
     optimizers = Optimizers(h, base_model)
     train_loader = ShuffledSequenceLoader(h, device)
     max_wallclock_ms = 1000.0 * h.max_wallclock_seconds if h.max_wallclock_seconds > 0 else None
-    if max_wallclock_ms is not None:
-        max_wallclock_ms -= h.gptq_reserve_seconds * 1000.0
-        log(f'gptq:reserving {h.gptq_reserve_seconds:.0f}s, effective={max_wallclock_ms:.0f}ms')
+    effective_gptq_reserve = 0.0 if h.skip_quant else h.gptq_reserve_seconds
+    if max_wallclock_ms is not None and effective_gptq_reserve > 0:
+        max_wallclock_ms -= effective_gptq_reserve * 1000.0
+        log(f'gptq:reserving {effective_gptq_reserve:.0f}s, effective={max_wallclock_ms:.0f}ms')
+    elif max_wallclock_ms is not None and h.skip_quant:
+        log(f'skip_quant:enabled effective_wallclock_ms={max_wallclock_ms:.0f}ms')
 
     def training_frac(step, elapsed_ms):
         if max_wallclock_ms is None:
@@ -1342,7 +1346,10 @@ def train_model(h, device, val_data):
         scale = lr_mul(frac)
         if h.num_loops > 0 and (not base_model.looping_active) and (frac >= h.enable_looping_at):
             base_model.looping_active = True
-            log(f'layer_loop:enabled step:{step} frac:{frac:.3f} encoder:{base_model.encoder_indices} decoder:{base_model.decoder_indices}')
+            with torch.no_grad():
+                for name, t in base_model.state_dict().items():
+                    ema_state[name].copy_(t.detach().float())
+            log(f'layer_loop:enabled step:{step} frac:{frac:.3f} ema_reset:true encoder:{base_model.encoder_indices} decoder:{base_model.decoder_indices}')
         if max_wallclock_ms is None:
             diffusion_active = True
             before_start = False
@@ -1398,6 +1405,9 @@ def train_and_eval(h, device):
     base_model, compiled_model = train_model(h, device, val_data)
     torch._dynamo.reset()
     timed_eval('pre-quantization post-ema', eval_val, h, device, val_data, compiled_model)
+    if h.skip_quant:
+        log('skip_quant:enabled — skipping post-training quantization pipeline')
+        return
     serialize(h, base_model, Path(__file__).read_text(encoding='utf-8'))
     if h.distributed:
         dist.barrier()
