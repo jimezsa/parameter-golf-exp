@@ -89,7 +89,6 @@ class Hyperparameters:
     diffusion_start_frac = float(os.environ.get('DIFFUSION_START_FRAC', 0.25))
     diffusion_stop_frac = float(os.environ.get('DIFFUSION_STOP_FRAC', 0.60))
     diffusion_subsample_frac = float(os.environ.get('DIFFUSION_SUBSAMPLE_FRAC', 1.00))
-    diffusion_prefix_crop_len = int(os.environ.get('DIFFUSION_PREFIX_CROP_LEN', 0))
     diffusion_scalar_wd = float(os.environ.get('DIFFUSION_SCALAR_WD', os.environ.get('ADAM_WD', '0.02')))
     diffusion_head_wd = float(os.environ.get('DIFFUSION_HEAD_WD', '0.00'))
     ema_decay = float(os.environ.get('EMA_DECAY', 0.9965))
@@ -464,7 +463,6 @@ class GPT(nn.Module):
         self.diffusion_loss_weight = h.diffusion_loss_weight
         self.diffusion_aux_prob = h.diffusion_aux_prob
         self.diffusion_subsample_frac = h.diffusion_subsample_frac
-        self.diffusion_prefix_crop_len = h.diffusion_prefix_crop_len
         self.tok_emb = nn.Embedding(h.vocab_size, h.embedding_dim)
         self.mask_embed = nn.Parameter(torch.randn(h.model_dim) * h.tied_embed_init_std)
         self.time_proj = CastedLinear(1, h.model_dim, bias=False)
@@ -568,15 +566,10 @@ class GPT(nn.Module):
             logits_proj = self.lm_head(x)
         return self.logit_softcap * torch.tanh(logits_proj / self.logit_softcap)
 
-    def _diffusion_loss(self, input_ids, subsample_frac=1.00, orig_latents=None):
+    def _diffusion_loss(self, input_ids, subsample_frac=1.00):
         if self.latent_proj is None:
             raise RuntimeError('latent_proj is required when diffusion loss is enabled')
-        if orig_latents is None:
-            orig_latents = self._embed_inputs(input_ids)
-        crop_len = self.diffusion_prefix_crop_len
-        if 0 < crop_len < input_ids.size(1):
-            input_ids = input_ids[:, :crop_len]
-            orig_latents = orig_latents[:, :crop_len, :]
+        orig_latents = self._embed_inputs(input_ids)
         bsz = input_ids.size(0)
         t = torch.rand(bsz, 1, 1, device=input_ids.device, dtype=torch.float32)
         t_mix = cast_if_needed(t, orig_latents.dtype)
@@ -610,8 +603,7 @@ class GPT(nn.Module):
         logits = self.forward_logits(input_ids)
         loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)).float(), target_ids.reshape(-1), reduction='mean')
         if self.training and run_aux_diffusion and self.diffusion_loss_weight > 0.0:
-            loss = loss + self.diffusion_loss_weight * self._diffusion_loss(
-                input_ids, self.diffusion_subsample_frac)
+            loss = loss + self.diffusion_loss_weight * self._diffusion_loss(input_ids, self.diffusion_subsample_frac)
         if self.training:
             loss = loss + self._ddp_keepalive_loss()
         return loss
@@ -1019,13 +1011,21 @@ def _loss_bpb(loss_sum, token_count, byte_count):
     return (val_loss, val_bpb)
 
 
+def _eval_loss_static_or_eager(compiled_model, fallback_model, x, y, static_batch_size):
+    # Keep the compiled fullgraph path on the fixed validation batch size, but
+    # send the final short tail batch through eager mode to avoid recompiles.
+    model_to_run = compiled_model if x.size(0) == static_batch_size or fallback_model is None else fallback_model
+    with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=True):
+        return model_to_run(x, y).detach()
+
+
 def _eval_logits_static_or_eager(compiled_logits_fn, eager_logits_fn, x, static_batch_size):
     logits_fn = compiled_logits_fn if x.size(0) == static_batch_size else eager_logits_fn
     with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
         return logits_fn(x)
 
 
-def eval_val(h, device, val_data, model):
+def eval_val(h, device, val_data, model, fallback_model=None):
     seq_len = h.eval_seq_len
     local_batch_tokens = h.val_batch_tokens // (h.world_size * h.grad_accum_steps)
     if local_batch_tokens < seq_len:
@@ -1039,6 +1039,8 @@ def eval_val(h, device, val_data, model):
     val_token_count = torch.zeros((), device=device, dtype=torch.float64)
     val_byte_count = torch.zeros((), device=device, dtype=torch.float64)
     model.eval()
+    if fallback_model is not None and fallback_model is not model:
+        fallback_model.eval()
     with torch.inference_mode():
         for batch_seq_start in range(seq_start, seq_end, local_batch_seqs):
             batch_seq_end = min(batch_seq_start + local_batch_seqs, seq_end)
@@ -1048,8 +1050,7 @@ def eval_val(h, device, val_data, model):
                 device=device, dtype=torch.int64, non_blocking=True)
             x = local[:-1].reshape(-1, seq_len)
             y = local[1:].reshape(-1, seq_len)
-            with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=True):
-                batch_loss = model(x, y).detach()
+            batch_loss = _eval_loss_static_or_eager(model, fallback_model, x, y, local_batch_seqs)
             batch_token_count = float(y.numel())
             val_loss_sum += batch_loss.to(torch.float64) * batch_token_count
             val_token_count += batch_token_count
@@ -1064,6 +1065,8 @@ def eval_val(h, device, val_data, model):
         dist.all_reduce(val_token_count, op=dist.ReduceOp.SUM)
         dist.all_reduce(val_byte_count, op=dist.ReduceOp.SUM)
     model.train()
+    if fallback_model is not None and fallback_model is not model:
+        fallback_model.train()
     return _loss_bpb(val_loss_sum, val_token_count, val_byte_count)
 
 
@@ -1255,8 +1258,7 @@ def train_model(h, device, val_data):
     log(
         f'diffusion_aux:prob:{h.diffusion_aux_prob:.2f} weight:{h.diffusion_loss_weight:.4f} '
         f'start_frac:{h.diffusion_start_frac:.2f} stop_frac:{h.diffusion_stop_frac:.2f} '
-        f'subsample:{h.diffusion_subsample_frac:.2f} crop_len:{h.diffusion_prefix_crop_len or h.train_seq_len} '
-        f'max_micro_steps_per_step:1 params:{diffusion_params}'
+        f'subsample:{h.diffusion_subsample_frac:.2f} max_micro_steps_per_step:1 params:{diffusion_params}'
     )
     optimizers = Optimizers(h, base_model)
     train_loader = ShuffledSequenceLoader(h, device)
@@ -1347,7 +1349,7 @@ def train_model(h, device, val_data):
         if should_validate:
             torch.cuda.synchronize()
             training_time_ms += 1000.0 * (time.perf_counter() - t0)
-            val_loss, val_bpb = eval_val(h, device, val_data, base_model)
+            val_loss, val_bpb = eval_val(h, device, val_data, model, base_model)
             log(f'{step}/{h.iterations} val_loss: {val_loss:.4f} val_bpb: {val_bpb:.4f}')
             torch.cuda.synchronize()
             t0 = time.perf_counter()
@@ -1419,7 +1421,7 @@ def train_and_eval(h, device):
     log(f'val_tokens: {val_data.val_tokens.numel() - 1}')
     base_model, compiled_model = train_model(h, device, val_data)
     torch._dynamo.reset()
-    timed_eval('pre-quantization post-ema', eval_val, h, device, val_data, base_model)
+    timed_eval('pre-quantization post-ema', eval_val, h, device, val_data, compiled_model, base_model)
     if h.skip_quant:
         log('skip_quant:enabled — skipping post-training quantization pipeline')
         return
@@ -1430,7 +1432,7 @@ def train_and_eval(h, device):
     if h.num_loops > 0:
         eval_model.looping_active = True
     compiled_model = torch.compile(eval_model, dynamic=False, fullgraph=True)
-    timed_eval('quantized', eval_val, h, device, val_data, eval_model)
+    timed_eval('quantized', eval_val, h, device, val_data, compiled_model, eval_model)
     if h.sliding_window_enabled:
         timed_eval('quantized_sliding_window', eval_val_sliding, h, device, val_data, eval_model)
     if h.ttt_enabled and h.sliding_window_enabled:
