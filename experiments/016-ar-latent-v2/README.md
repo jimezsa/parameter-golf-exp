@@ -8,6 +8,8 @@ Clean continuation of the AR-latent lane (exp 014 codebase). Fresh iteration tab
 
 Forked from exp 014 `train_gpt.py` as-is. No code changes in v1.
 
+`train_gpt_decode_diffusion.py` now defaults to `DIFFUSION_SEQ_LEN=512`, cropping only the stochastic latent-MSE auxiliary diffusion pass before its transformer forward. Standard validation is run through the eager base model to avoid the compiled-validation recompile failure observed in v2/v3.
+
 Manual submission-code packing:
 
 ```bash
