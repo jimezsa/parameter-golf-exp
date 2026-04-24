@@ -1019,21 +1019,13 @@ def _loss_bpb(loss_sum, token_count, byte_count):
     return (val_loss, val_bpb)
 
 
-def _eval_loss_static_or_eager(compiled_model, fallback_model, x, y, static_batch_size):
-    # Keep the compiled fullgraph path on the fixed validation batch size, but
-    # send the final short tail batch through eager mode to avoid recompiles.
-    model_to_run = compiled_model if x.size(0) == static_batch_size or fallback_model is None else fallback_model
-    with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=True):
-        return model_to_run(x, y).detach()
-
-
 def _eval_logits_static_or_eager(compiled_logits_fn, eager_logits_fn, x, static_batch_size):
     logits_fn = compiled_logits_fn if x.size(0) == static_batch_size else eager_logits_fn
     with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
         return logits_fn(x)
 
 
-def eval_val(h, device, val_data, model, fallback_model=None):
+def eval_val(h, device, val_data, model):
     seq_len = h.eval_seq_len
     local_batch_tokens = h.val_batch_tokens // (h.world_size * h.grad_accum_steps)
     if local_batch_tokens < seq_len:
@@ -1047,8 +1039,6 @@ def eval_val(h, device, val_data, model, fallback_model=None):
     val_token_count = torch.zeros((), device=device, dtype=torch.float64)
     val_byte_count = torch.zeros((), device=device, dtype=torch.float64)
     model.eval()
-    if fallback_model is not None and fallback_model is not model:
-        fallback_model.eval()
     with torch.inference_mode():
         for batch_seq_start in range(seq_start, seq_end, local_batch_seqs):
             batch_seq_end = min(batch_seq_start + local_batch_seqs, seq_end)
@@ -1058,7 +1048,8 @@ def eval_val(h, device, val_data, model, fallback_model=None):
                 device=device, dtype=torch.int64, non_blocking=True)
             x = local[:-1].reshape(-1, seq_len)
             y = local[1:].reshape(-1, seq_len)
-            batch_loss = _eval_loss_static_or_eager(model, fallback_model, x, y, local_batch_seqs)
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=True):
+                batch_loss = model(x, y).detach()
             batch_token_count = float(y.numel())
             val_loss_sum += batch_loss.to(torch.float64) * batch_token_count
             val_token_count += batch_token_count
@@ -1073,8 +1064,6 @@ def eval_val(h, device, val_data, model, fallback_model=None):
         dist.all_reduce(val_token_count, op=dist.ReduceOp.SUM)
         dist.all_reduce(val_byte_count, op=dist.ReduceOp.SUM)
     model.train()
-    if fallback_model is not None and fallback_model is not model:
-        fallback_model.train()
     return _loss_bpb(val_loss_sum, val_token_count, val_byte_count)
 
 
@@ -1358,7 +1347,7 @@ def train_model(h, device, val_data):
         if should_validate:
             torch.cuda.synchronize()
             training_time_ms += 1000.0 * (time.perf_counter() - t0)
-            val_loss, val_bpb = eval_val(h, device, val_data, model, base_model)
+            val_loss, val_bpb = eval_val(h, device, val_data, base_model)
             log(f'{step}/{h.iterations} val_loss: {val_loss:.4f} val_bpb: {val_bpb:.4f}')
             torch.cuda.synchronize()
             t0 = time.perf_counter()
@@ -1430,7 +1419,7 @@ def train_and_eval(h, device):
     log(f'val_tokens: {val_data.val_tokens.numel() - 1}')
     base_model, compiled_model = train_model(h, device, val_data)
     torch._dynamo.reset()
-    timed_eval('pre-quantization post-ema', eval_val, h, device, val_data, compiled_model, base_model)
+    timed_eval('pre-quantization post-ema', eval_val, h, device, val_data, base_model)
     if h.skip_quant:
         log('skip_quant:enabled — skipping post-training quantization pipeline')
         return
@@ -1441,7 +1430,7 @@ def train_and_eval(h, device):
     if h.num_loops > 0:
         eval_model.looping_active = True
     compiled_model = torch.compile(eval_model, dynamic=False, fullgraph=True)
-    timed_eval('quantized', eval_val, h, device, val_data, compiled_model, eval_model)
+    timed_eval('quantized', eval_val, h, device, val_data, eval_model)
     if h.sliding_window_enabled:
         timed_eval('quantized_sliding_window', eval_val_sliding, h, device, val_data, eval_model)
     if h.ttt_enabled and h.sliding_window_enabled:
