@@ -607,12 +607,11 @@ class GPT(nn.Module):
         return self._project_logits(self._forward_hidden(input_ids))
 
     def forward(self, input_ids, target_ids, run_aux_diffusion=False):
-        input_embeds = self._embed_inputs(input_ids)
-        logits = self._project_logits(self._forward_hidden(input_ids, x_override=input_embeds))
+        logits = self.forward_logits(input_ids)
         loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)).float(), target_ids.reshape(-1), reduction='mean')
         if self.training and run_aux_diffusion and self.diffusion_loss_weight > 0.0:
             loss = loss + self.diffusion_loss_weight * self._diffusion_loss(
-                input_ids, self.diffusion_subsample_frac, orig_latents=input_embeds)
+                input_ids, self.diffusion_subsample_frac)
         if self.training:
             loss = loss + self._ddp_keepalive_loss()
         return loss

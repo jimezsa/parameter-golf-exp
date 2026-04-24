@@ -71,3 +71,4 @@ experiments/016-ar-latent-v2/train_gpt.py
 
 | Version | Val BPB | Post-Quant BPB | Step Time (ms) | Artifact Size | Commit | Log | Description |
 | ------- | ------- | -------------- | -------------- | ------------- | ------ | --- | ----------- |
+| v2 | FAIL | — | — | — | 5070904 | — | `train_gpt_encode_diffusion.py` x8 run crashed during pre-quant validation in compiled `forward` after the diffusion crop wiring change; stack reached `eval_val -> _eval_loss_static_or_eager -> forward`. |
