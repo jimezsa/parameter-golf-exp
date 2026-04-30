@@ -1,5 +1,7 @@
 # Experiment 016: AR Latent v2
 
+![Exp 016 8xH100 Progress](progress_8x.png)
+
 ## Hypothesis
 
 Clean continuation of the AR-latent lane (exp 014 codebase). Fresh iteration table, no legacy sweep baggage.

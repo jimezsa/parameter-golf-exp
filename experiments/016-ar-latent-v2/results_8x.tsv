@@ -1,0 +1,10 @@
+version	val_bpb	post_quant_bpb	step_time_ms	artifact_size	status	description
+v1-8x	1.0866	1.0812	128	15989852	KEEP	Baseline (no diffusion)
+v2-8x	1.0883	1.0829	135	15996803	DISCARD	Diffusion DLW=0.5, 0.25-0.6
+v3-8x	1.0899	1.0845	144	15999829	DISCARD	Diffusion DLW=0.3, 0.25-0.6
+v4-8x	1.0887	1.0832	135	15998170	DISCARD	DLW=0.3, stop=0.7
+v5-8x	1.0883	1.0829	127	15994874	DISCARD	DLW=0.5, start=0, stop=0.5, loop=0.5
+v6-8x	1.0916	1.0864	138	15995363	DISCARD	aux_prob=0.2
+v7-8x	1.0881	1.0827	134	15999198	DISCARD	Rerun default diff, new pod
+v8-8x	1.0931	1.0878	138	15994321	DISCARD	Rerun aux=0.2, new pod
+v9-8x	1.0883	1.0833	127	15999862	DISCARD	beta2=0.9, matrix_lr=0.02
