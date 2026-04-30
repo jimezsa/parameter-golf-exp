@@ -1,0 +1,67 @@
+variant	val_bpb	step_time_ms	steps	status	description
+baseline	1.2035	778		DISCARD	baseline: Exp 012 latent v3 baseline rerun (no quant), confirms reference
+baseline (fresh, pod 20260416)	1.2063	794.79	740	DISCARD	baseline (fresh, pod 20260416): Same-pod SKIP_QUANT=1 control for throughput-probe reference; 588
+train_gpt_01_screen.py v1-probe		745.47	10	FAIL	train_gpt_01_screen.py v1-probe: SIGHUP'd at step 10 during initial nohup setup; first attempt of v1 before of...
+train_gpt_01_screen.py v1	1.2072	805	731	DISCARD	train_gpt_01_screen.py v1: Screen-mode warmup=2, SKIP_QUANT=1, baseline rerun
+train_gpt_01_screen.py v2-attempt			0	FAIL	train_gpt_01_screen.py v2-attempt: Crashed at startup: tokenizer file
+train_gpt_01_screen.py v2	1.2035	779	756	DISCARD	train_gpt_01_screen.py v2: SwiGELU hidden_dim=1344 probe
+train_gpt_01_screen.py v3	1.2036	794	756	DISCARD	train_gpt_01_screen.py v3: Intended delayed-diffusion window 25%–60%
+train_gpt_01_screen.py v4	1.1996	761.57	788	KEEP	train_gpt_01_screen.py v4: Real delayed-diffusion window DIFFUSION_START_FRAC=0
+train_gpt_01_screen.py v5	1.2033	763.43	787	DISCARD	train_gpt_01_screen.py v5: Confirm-seed of v4 (SEED=2026, all else identical)
+train_gpt_01_screen.py v6	1.2017	762.59	772	DISCARD	train_gpt_01_screen.py v6: AR self-gen GPTQ calibration
+train_gpt_01_screen.py v6b			10	FAIL	train_gpt_01_screen.py v6b: v6 retry, killed at step 10 by user directive ("pls dont run any quant") befo...
+train_gpt_01_screen.py v7	1.2014	760.66	789	KEEP	train_gpt_01_screen.py v7: Third confirm-seed of delayed-diffusion recipe (SEED=42, DIFFUSION_START_FRAC=0
+train_gpt_01_screen.py v8	1.1999	762.98	787	DISCARD	train_gpt_01_screen.py v8: Window-left-edge scan of locked delayed-diffusion recipe: DIFFUSION_START_FRAC=0
+train_gpt_01_screen.py v8b	1.1994	760.05	790	DISCARD	train_gpt_01_screen.py v8b: Window-right-shift scan of locked delayed-diffusion recipe: DIFFUSION_START_F...
+train_gpt_01_screen.py v9	1.1987	754.63	796	DISCARD	train_gpt_01_screen.py v9: Aux-prob weaken scan of locked delayed-diffusion recipe: DIFFUSION_AUX_PROB=0
+train_gpt_01_screen.py v9b	1.2007	771.27	779	DISCARD	train_gpt_01_screen.py v9b: Aux-prob strengthen scan of locked delayed-diffusion recipe: DIFFUSION_AUX_PR...
+train_gpt_01_screen.py v9c	1.2024	755.85	794	KEEP	train_gpt_01_screen.py v9c: Second-seed confirm of v9 (new candidate default): DIFFUSION_AUX_PROB=0
+train_gpt_01_screen.py v9d	1.2009	756.90	793	KEEP	train_gpt_01_screen.py v9d: Third-seed lock of AUX_PROB=0
+train_gpt_01_screen.py v10			10	FAIL	train_gpt_01_screen.py v10: P1 peak-LR scan (Tier 1) on the 3-seed-locked AUX=0
+train_gpt_01_screen.py v10-retry	1.195	756.97	793	KEEP	train_gpt_01_screen.py v10-retry: P1 peak-LR scan (Tier 1)
+train_gpt_01_screen.py v10b	1.1966	757.47	793	KEEP	train_gpt_01_screen.py v10b: P1 peak-LR scan
+train_gpt_01_screen.py v10c	1.1971	756.72	793	KEEP	train_gpt_01_screen.py v10c: P1 peak-LR scan
+train_gpt_01_screen.py v11a	1.1971	757.89	792	DISCARD	train_gpt_01_screen.py v11a: P1 peak-LR bracket scan (low side) on the 3-seed-locked MATRIX_LR=0
+train_gpt_01_screen.py v11b	1.1936	759.03	791	KEEP	train_gpt_01_screen.py v11b: P1 peak-LR bracket scan (high side) on the 3-seed-locked MATRIX_LR=0
+train_gpt_01_screen.py v11c	1.1917	759.16	791	KEEP	train_gpt_01_screen.py v11c: P1 peak-LR bracket scan (further high side) on the 3-seed-locked MATRIX_LR=0
+train_gpt_01_screen.py v11c2	1.191	759.52	791	KEEP	train_gpt_01_screen.py v11c2: P1 peak-LR bracket scan (continued high side) on the 3-seed-locked MATRIX_LR=0
+train_gpt_01_screen.py v11c3	1.1899	758.65	791	KEEP	train_gpt_01_screen.py v11c3: P1 peak-LR bracket scan (further continued high side) on the 3-seed-locked MA...
+train_gpt_01_screen.py v11c4	1.1897	758.99	791	KEEP	train_gpt_01_screen.py v11c4: P1 peak-LR bracket scan (final rung) on the 3-seed-locked MATRIX_LR=0
+train_gpt_01_screen.py v11d	1.1912	759.42	791	KEEP	train_gpt_01_screen.py v11d: P1 peak-LR 2-seed confirm of MATRIX_LR=0
+train_gpt_01_screen.py v11e				FAIL	train_gpt_01_screen.py v11e: P1 peak-LR 3-seed lock attempt of MATRIX_LR=0
+train_gpt_01_screen.py v11e-retry	1.192	790.51	760	KEEP	train_gpt_01_screen.py v11e-retry: P1 peak-LR 3-seed lock of MATRIX_LR=0
+train_gpt_01_screen.py v12a	1.1931	760.78	789	DISCARD	train_gpt_01_screen.py v12a: P2 EMBED_LR scan (first rung, regression) on the 3-seed-locked MATRIX_LR=0
+train_gpt_01_screen.py v13	1.1896	755.43	795	DISCARD	train_gpt_01_screen.py v13: P3 HEAD_LR scan (first rung, within noise) on the 3-seed-locked MATRIX_LR=0
+train_gpt_01_screen.py v13b	1.1898	756.56	794	DISCARD	train_gpt_01_screen.py v13b: P3 HEAD_LR scan (second rung, within noise
+train_gpt_01_screen.py v14	1.1906	756.83	793	DISCARD	train_gpt_01_screen.py v14: P4 SCALAR_LR scan (first rung, within noise) on the 3-seed-locked MATRIX_LR=0
+train_gpt_01_screen.py v14b	1.191	755.15	795	DISCARD	train_gpt_01_screen.py v14b: P4 SCALAR_LR scan (second rung
+train_gpt_02_loader_prefetch.py v15-02a	1.1885	752.77	798	KEEP	train_gpt_02_loader_prefetch.py v15-02a: Throughput probe
+train_gpt_02_loader_prefetch.py v15b	1.1902	752.07	798	KEEP	train_gpt_02_loader_prefetch.py v15b: 02 harness BPB-sanity confirm @ seed=2026
+train_gpt_02_loader_prefetch.py v16	1.1891	759.47	791	DISCARD	train_gpt_02_loader_prefetch.py v16: P5 diffusion-window-width scan (rung 1, widen-symmetric, within noise) on the...
+train_gpt_02_loader_prefetch.py v16c	1.1886	750.91	800	DISCARD	train_gpt_02_loader_prefetch.py v16c: P5 diffusion-window-width scan (rung 2, narrow-symmetric
+train_gpt_02_loader_prefetch.py v17	1.1884	754.33	796	DISCARD	train_gpt_02_loader_prefetch.py v17: P6 WD retune (rung 1, WITHIN NOISE) on 02 harness with 3-seed-locked MATRIX_LR=0
+train_gpt_02_loader_prefetch.py v17b	1.1879	754.41	796	DISCARD	train_gpt_02_loader_prefetch.py v17b: P6 WD retune (rung 2, AT NOISE EDGE
+train_gpt_02_loader_prefetch.py v17c	1.1879	754.25	796	DISCARD	train_gpt_02_loader_prefetch.py v17c: P6 WD retune (rung 3, PLATEAU
+train_gpt_02_loader_prefetch.py v18	1.1895	751.69	799	DISCARD	train_gpt_02_loader_prefetch.py v18: P7 schedule tuning (rung 1, WARMDOWN_FRAC=0
+train_gpt_02_loader_prefetch.py v18b	1.1894	752.19	798	DISCARD	train_gpt_02_loader_prefetch.py v18b: P7 schedule tuning (rung 2, WARMDOWN_FRAC=0
+train_gpt_02_loader_prefetch.py v19	1.1883	753.48	797	DISCARD	train_gpt_02_loader_prefetch.py v19: P7 schedule tuning (rung 2, WARMUP_STEPS=40
+train_gpt_03_bucketed_allreduce.py		pending	pending	FAIL	train_gpt_03_bucketed_allreduce.py: Coalesced replicated-grad all-reduce path
+train_gpt_04_cyclic_diffusion.py v20	1.1919	760.16	774	DISCARD	train_gpt_04_cyclic_diffusion.py v20: 04 cyclic-diffusion probe
+train_gpt_02_loader_prefetch.py v21	1.1868	752.51	798	KEEP	train_gpt_02_loader_prefetch.py v21: P8 end-LR floor probe
+train_gpt_02_loader_prefetch.py v21b	1.1888	757.99	792	KEEP	train_gpt_02_loader_prefetch.py v21b: P8 end-LR floor 2-seed confirm of MIN_LR=0
+train_gpt_02_loader_prefetch.py v21c	1.1875	752.71	798	KEEP	train_gpt_02_loader_prefetch.py v21c: P8 end-LR floor 3-seed lock of MIN_LR=0
+train_gpt_02_loader_prefetch.py v22a	1.1871	752.93	797	DISCARD	train_gpt_02_loader_prefetch.py v22a: P8 MIN_LR peak scan (rung 1, WITHIN NOISE) on 02 harness with 3-seed-locked M...
+train_gpt_02_loader_prefetch.py v22b	1.1877	751.66	799	DISCARD	train_gpt_02_loader_prefetch.py v22b: P8 MIN_LR peak scan (rung 2, REGRESSION
+train_gpt_02_loader_prefetch.py v23	1.191	816.44	735	DISCARD	train_gpt_02_loader_prefetch.py v23: P9 arch micro-tweak: 12L/512d
+train_gpt_02_loader_prefetch.py v23b	1.189	691.38	868	DISCARD	train_gpt_02_loader_prefetch.py v23b: P9 arch micro-tweak: 10L/512d
+train_gpt_02_loader_prefetch.py v23c	1.1971	993.80	604	DISCARD	train_gpt_02_loader_prefetch.py v23c: P9 arch micro-tweak: 11L/576d
+train_gpt_02_loader_prefetch.py v24	1.1873	757.61	793	DISCARD	train_gpt_02_loader_prefetch.py v24: P10 DIFFUSION_LOSS_WEIGHT scan (rung 1, WITHIN NOISE)
+train_gpt_02_loader_prefetch.py v24b	1.187	752.33	798	DISCARD	train_gpt_02_loader_prefetch.py v24b: P10 DIFFUSION_LOSS_WEIGHT scan (rung 2, WITHIN NOISE)
+train_gpt_02_loader_prefetch.py v24c	1.1871	753.05	797	DISCARD	train_gpt_02_loader_prefetch.py v24c: P10 DIFFUSION_LOSS_WEIGHT scan (rung 3, WITHIN NOISE
+train_gpt_02_loader_prefetch.py v25	1.1879	758.04	792	DISCARD	train_gpt_02_loader_prefetch.py v25: P11 GRAD_CLIP_NORM scan (rung 1, REGRESSION
+train_gpt_02_loader_prefetch.py v26	1.1871	749.75	801	DISCARD	train_gpt_02_loader_prefetch.py v26: P12 LOGIT_SOFTCAP scan (rung 1, WITHIN NOISE)
+train_gpt_02_loader_prefetch.py v26b	1.1932	748.73	802	DISCARD	train_gpt_02_loader_prefetch.py v26b: P12 LOGIT_SOFTCAP scan (rung 2, REGRESSION
+train_gpt_02_loader_prefetch.py v27	1.1901	720.20	834	DISCARD	train_gpt_02_loader_prefetch.py v27: P13 NUM_KV_HEADS=2 (aggressive GQA
+train_gpt_02_loader_prefetch.py v28	1.1868	752.14	798	DISCARD	train_gpt_02_loader_prefetch.py v28: P14 LATE_QAT_THRESHOLD scan (rung 1, TIES DEFAULT
+train_gpt_02_loader_prefetch.py v28b	1.1884	757.93	792	DISCARD	train_gpt_02_loader_prefetch.py v28b: P14 LATE_QAT_THRESHOLD scan (rung 2, REGRESSION
+train_gpt_02_loader_prefetch.py v29	1.1869	751.76	799	DISCARD	train_gpt_02_loader_prefetch.py v29: P15 SWA ablation (SWA_ENABLED=0
