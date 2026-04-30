@@ -4,6 +4,14 @@ This repo contains a minimal Parameter Golf baseline experiment setup. The main 
 
 > Note: The original baseline reference for this repo is in [baseline/README.md](baseline/README.md).
 
+## Experiment Progress
+
+### Exp 013 — AR Latent Diffusion (1×H100)
+
+![Exp 013 Progress](experiments/013-ar-latent-diffusion/progress_1x_animated.gif)
+
+67 iterations of AR-latent diffusion on 1×H100, improving from 1.2035 → 1.1868 val BPB. See [experiments/013-ar-latent-diffusion/README.md](experiments/013-ar-latent-diffusion/README.md) for the full iteration table.
+
 ## Run a Full Experiment on a GPU Server
 
 These steps are adapted from `baseline/README.md`, but updated for this repo layout.

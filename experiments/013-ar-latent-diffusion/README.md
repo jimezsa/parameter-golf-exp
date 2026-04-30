@@ -2,6 +2,8 @@
 
 ![1xH100 Progress](progress_1x.png)
 
+https://github.com/jimezsa/parameter-golf-exp/blob/master/experiments/013-ar-latent-diffusion/progress_1x_animated.mp4
+
 ## Motivation
 
 Exp 013 inherits the Exp 012 AR-latent recipe, but the main lever here is calibration rather than architecture churn. The training-side reference to beat is Exp 012 v10 at **1.2025** pre-quant BPB on 1xH100, while Exp 011 latent v3 showed this family can hold a near-zero post-quant gap at **1.2036** sliding-window BPB.
