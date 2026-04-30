@@ -1,5 +1,7 @@
 # Experiment: Shared-Head Multi-Token Prediction (MTP-Lite)
 
+![Exp 008 Progress](progress_1x.png)
+
 ## Paper / Source
 - **Title**: Better & Faster Large Language Models via Multi-token Prediction
 - **Authors**: Meta, 2024

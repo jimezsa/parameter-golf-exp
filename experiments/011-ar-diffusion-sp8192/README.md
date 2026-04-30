@@ -1,5 +1,7 @@
 # Experiment 011: AR-Diffusion SP8192
 
+![Exp 011 Progress](progress_1x.png)
+
 ## Paper / Source
 - Inherits diffusion approach from Exp 009 (Chen et al. 2023, Lin et al. 2022, Zheng et al. 2023)
 - **Stack rebase** onto the SP8192 meta from the April 2026 leaderboard top 5

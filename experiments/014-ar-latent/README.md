@@ -1,5 +1,7 @@
 # Experiment 014: AR Latent Baseline
 
+![Exp 014 Progress](progress_1x.png)
+
 ## Purpose
 
 Exp 014 keeps the `ar-latent` naming while pulling the new quantization lane out of Exp 013 into a clean baseline. Training keeps the proven loader-prefetch harness, but the quantization and diffusion-stability path changes:

@@ -1,0 +1,7 @@
+version	val_bpb	status	description
+v1	1.4090	DISCARD	Initial run, EMA collapse
+v2	1.3922	DISCARD	SWA fix, still above baseline
+v3	1.2686	KEEP	No delay adapter, beats baseline
+v4	1.2680	DISCARD	LATE_QAT=0.3, marginal gain
+v5	1.2681	KEEP	EMA_START_STEP=700, dominant win
+v6	1.2679	KEEP	EMA_START_STEP=800, best 1xH100

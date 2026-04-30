@@ -1,0 +1,36 @@
+version	val_bpb	status	description
+v1	1.1881	KEEP	Baseline: SwiGeLU=12, rope32, KV8
+v14	1.1955	DISCARD	gptg script baseline
+v15	1.1888	DISCARD	gptg v2, KV4, rope16
+v16	1.1866	DISCARD	KV8+rope32+SwiGeLU, over 16MB
+v17	—	FAIL	Quant enabled, killed after 10 steps
+v18	1.1889	DISCARD	Baseline full GPTQ
+v19	1.1906	DISCARD	SwiGeLU only
+v20	1.1866	DISCARD	KV8+rope32, over 16MB
+v21	1.1861	KEEP	KV8+rope32+SWA
+v22	1.1867	DISCARD	SWA config confusion
+v23	1.2227	DISCARD	Recurrence, slow
+v24	1.3377	DISCARD	Undertrained (238 steps)
+v25	1.1882	DISCARD	KV8+rope32, SWA off
+v26	1.1860	KEEP	KV8+rope32 rerun
+v27	1.1858	KEEP	Best KV8 pre-quant
+v28	1.1862	DISCARD	KV8+rope32+SwiGeLU
+v29	1.1881	DISCARD	Headwise RoPE
+v30	1.1920	DISCARD	Layerwise RoPE
+v31	—	FAIL	xPoS rope64, crashed
+v32	1.1899	DISCARD	xPoS+rope64
+v33	1.1899	DISCARD	xPoS+rope64+sb1024
+v34	1.1879	DISCARD	xPoS+rope16
+v35	1.1871	DISCARD	YaRN+rope16
+v36	1.1898	DISCARD	Layerwise rope 32-64
+v37	1.1893	DISCARD	Layerwise rope+rope4
+v38	1.2042	DISCARD	Dropout=0.10, hurts
+v39	1.2025	DISCARD	Dropout=0.05
+v40	1.3142	DISCARD	No diffusion+recurrence, regression
+v41	1.1997	DISCARD	KV8+SwiGeLU+embed_bits=6
+v42	1.3267	DISCARD	Undertrained (244 steps)
+v43	2.4710	FAIL	EMA broken, layer looping
+v44	2.4101	FAIL	EMA broken, layer looping
+v45	1.8383	FAIL	EMA broken, no loops
+v46	1.2627	DISCARD	encode_diffusion DLW=0.5
+v48	1.2580	DISCARD	encode_diffusion DLW=0.3

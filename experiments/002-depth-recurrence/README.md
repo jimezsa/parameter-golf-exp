@@ -1,5 +1,7 @@
 # Experiment: Depth Recurrence
 
+![Exp 002 Progress](progress_1x.png)
+
 ## Paper / Source
 - Title: Depth recurrence with partial middle-layer sharing and learned per-step scalar conditioning
 - Authors: Internal experiment spec from scout

@@ -1,0 +1,7 @@
+version	val_bpb	status	description
+v10	1.2686	KEEP	Best uncompressed, WARMDOWN=224
+v11	1.2691	DISCARD	EMA variant (no gain over v10)
+v12	1.3719	DISCARD	WARMDOWN=3500, PRUNE=0.15 — undertrained
+v13	1.2703	DISCARD	WARMDOWN=224, PRUNE=0.15 — over 16MB
+v14	1.2695	KEEP	WARMDOWN=224, PRUNE=0.27 — fits 16MB
+v15	1.2712	DISCARD	PRUNE=0.37 — too aggressive

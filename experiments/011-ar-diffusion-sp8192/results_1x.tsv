@@ -1,0 +1,11 @@
+version	val_bpb	status	description
+v1	1.2048	DISCARD	SP8192 baseline, over 16MB
+v2	1.2107	DISCARD	Diffusion ON, dead on SP8192
+v3	1.2138	DISCARD	Diffusion bug + aggressive pruning
+v4	1.2046	KEEP	Diffusion OFF, fits 16MB, best 1x
+v5	1.2051	DISCARD	Diffusion 3%, near-identical v4
+v6	1.2060	DISCARD	Confirms diffusion dead on SP8192
+latent-v1	1.2022	KEEP	Latent MSE diffusion, best raw BPB
+latent-v2	1.2051	DISCARD	Higher diff prob hurt
+latent-v1-noema	1.2021	DISCARD	EMA removal no impact
+latent-v3	1.2031	KEEP	Near-zero quant gap (0.0005)

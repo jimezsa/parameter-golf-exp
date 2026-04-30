@@ -1,5 +1,7 @@
 # Experiment 012: AR Latent Diffusion SP8192
 
+![Exp 012 Progress](progress_1x.png)
+
 ## Literature Foundation: Latent Diffusion as AR Regularizer
 
 Recent deep search into autoregressive (AR) models and diffusion reveals that adding a continuous latent diffusion prior mitigates exposure bias, condition inconsistency, and overfitting. This strongly justifies the approach in Exp 012.

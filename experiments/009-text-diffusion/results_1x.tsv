@@ -1,0 +1,13 @@
+version	val_bpb	status	description
+v1	1.5064	FAIL	Initial run, GPTQ crash
+v2	1.4641	DISCARD	EMA broken, quant useless
+v3	1.2890	KEEP	EMA fix, beats baseline
+v4	1.4830	DISCARD	13L/512d regression
+v5	1.2775	KEEP	Minimal diffusion breakthrough
+v6	1.4008	DISCARD	Missing settings regression
+v7	1.2763	KEEP	Scout schedule, near-zero quant gap
+v8	1.2759	DISCARD	WARMDOWN=224, negligible gain
+v9	1.3565	FAIL	SWA poisoned quant
+v10	1.3041	FAIL	11L/576d, EMA never activated
+v11	1.3936	DISCARD	QK-gain 5.25, degraded BPB
+v12	1.2742	KEEP	Parallel residuals, new best

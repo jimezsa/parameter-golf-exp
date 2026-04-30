@@ -1,5 +1,7 @@
 # Experiment 009: AR-Diffusion Hybrid (Soft-Masked)
 
+![Exp 009 Progress](progress_1x.png)
+
 ## Paper / Source
 - **Titles**:
   1. *A Cheaper and Better Diffusion Language Model with Soft-Masked Noise* (Chen et al., 2023) — https://arxiv.org/abs/2304.04746
